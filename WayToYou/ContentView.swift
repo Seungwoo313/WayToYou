@@ -7,6 +7,7 @@ struct ContentView: View {
     }
 
     @State private var store = WayToYouStore()
+    @State private var backend = SupabaseSessionController()
     @State private var now = Date()
     @State private var route = SheetRoute.none
     @State private var selectedTab = AppTab.home
@@ -15,6 +16,66 @@ struct ContentView: View {
     private var focus: HomeFocus { store.focus(at: now) }
 
     var body: some View {
+        Group {
+            if backend.authenticatedUserID == nil {
+                AppleSignInView(backend: backend)
+            } else if !store.backendIsReady {
+                connectionLoading
+            } else {
+                if store.isConnected {
+                    connectedApp
+                } else {
+                    ConnectionOnboardingView(
+                        store: store,
+                        suggestedName: backend.suggestedDisplayName
+                    )
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .task { await backend.restoreSession() }
+        .task(id: backend.authenticatedUserID) {
+            guard let userID = backend.authenticatedUserID,
+                  let client = backend.client else { return }
+            await store.activateBackend(client: client, userID: userID)
+        }
+        .task(id: "\(scenePhase)-\(store.isConnected)") { await runClock() }
+        .sheet(item: $route.presented) { destination in
+            sheet(for: destination)
+        }
+        #if DEBUG
+        // 스크린샷용. `simctl launch ... -previewSheet compose`처럼 띄운다.
+        .onAppear {
+            guard store.isConnected else { return }
+            switch UserDefaults.standard.string(forKey: "previewSheet") {
+            case "compose": route = .compose
+            case "signal": route = .signal
+            case "log": selectedTab = .log
+            case "settings": selectedTab = .settings
+            case "letter":
+                if let parcel = store.waitingToOpen(at: .now).first ?? store.lastOpenedIncoming() {
+                    route = .letter(parcel)
+                }
+            default: break
+            }
+        }
+        #endif
+    }
+
+    private var connectionLoading: some View {
+        ZStack {
+            Palette.spaceDeep.ignoresSafeArea()
+            VStack(spacing: Metric.m) {
+                ProgressView()
+                    .tint(Palette.me)
+                Text("연결 상태를 확인하고 있어요")
+                    .font(.rounded(.subheadline, .medium))
+                    .foregroundStyle(Palette.textSecondary)
+            }
+        }
+    }
+
+    private var connectedApp: some View {
         TabView(selection: $selectedTab) {
             Tab("홈", systemImage: "globe.asia.australia.fill", value: AppTab.home) {
                 home
@@ -34,27 +95,6 @@ struct ContentView: View {
                 SettingsSheet(store: store, presentedAsSheet: false)
             }
         }
-        .preferredColorScheme(.dark)
-        .task(id: scenePhase) { await runClock() }
-        .sheet(item: $route.presented) { destination in
-            sheet(for: destination)
-        }
-        #if DEBUG
-        // 스크린샷용. `simctl launch ... -previewSheet compose`처럼 띄운다.
-        .onAppear {
-            switch UserDefaults.standard.string(forKey: "previewSheet") {
-            case "compose": route = .compose
-            case "signal": route = .signal
-            case "log": selectedTab = .log
-            case "settings": selectedTab = .settings
-            case "letter":
-                if let parcel = store.waitingToOpen(at: .now).first ?? store.lastOpenedIncoming() {
-                    route = .letter(parcel)
-                }
-            default: break
-            }
-        }
-        #endif
     }
 
     private var home: some View {
@@ -145,7 +185,7 @@ struct ContentView: View {
     /// 하늘에 뜬 소포가 없으면 굳이 1초마다 깨울 이유가 없다.
     /// 예전엔 TimelineView가 화면 전체를 매초 다시 그렸다.
     private func runClock() async {
-        guard scenePhase == .active else { return }
+        guard scenePhase == .active, store.isConnected else { return }
         while !Task.isCancelled {
             let moment = Date()
             now = moment

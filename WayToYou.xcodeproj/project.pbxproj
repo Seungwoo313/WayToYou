@@ -6,13 +6,31 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A10000013026CED70042EC07 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = A10000053026CED70042EC07 /* Supabase */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		A10000023026CED70042EC07 /* Configuration.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Configuration.xcconfig; sourceTree = "<group>"; };
 		FB8ACF413026CED70042EC07 /* WayToYou.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WayToYou.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A10000063026CED70042EC07 /* Exceptions for "WayToYou" folder in "WayToYou" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = FB8ACF403026CED70042EC07 /* WayToYou */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		FB8ACF433026CED70042EC07 /* WayToYou */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A10000063026CED70042EC07 /* Exceptions for "WayToYou" folder in "WayToYou" target */,
+			);
 			path = WayToYou;
 			sourceTree = "<group>";
 		};
@@ -23,15 +41,25 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000013026CED70042EC07 /* Supabase in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		A10000033026CED70042EC07 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				A10000023026CED70042EC07 /* Configuration.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
 		FB8ACF383026CED70042EC07 = {
 			isa = PBXGroup;
 			children = (
+				A10000033026CED70042EC07 /* Config */,
 				FB8ACF433026CED70042EC07 /* WayToYou */,
 				FB8ACF423026CED70042EC07 /* Products */,
 			);
@@ -65,6 +93,7 @@
 			);
 			name = WayToYou;
 			packageProductDependencies = (
+				A10000053026CED70042EC07 /* Supabase */,
 			);
 			productName = WayToYou;
 			productReference = FB8ACF413026CED70042EC07 /* WayToYou.app */;
@@ -82,6 +111,11 @@
 				TargetAttributes = {
 					FB8ACF403026CED70042EC07 = {
 						CreatedOnToolsVersion = 26.6;
+						SystemCapabilities = {
+							com.apple.SignInWithApple = {
+								enabled = 1;
+							};
+						};
 					};
 				};
 			};
@@ -94,6 +128,9 @@
 			);
 			mainGroup = FB8ACF383026CED70042EC07;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A10000043026CED70042EC07 /* XCRemoteSwiftPackageReference "supabase-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FB8ACF423026CED70042EC07 /* Products */;
 			projectDirPath = "";
@@ -248,14 +285,17 @@
 		};
 		FB8ACF4F3026CED80042EC07 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A10000023026CED70042EC07 /* Configuration.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = WayToYou/WayToYou.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = Y3QR2X882L;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WayToYou/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -280,14 +320,17 @@
 		};
 		FB8ACF503026CED80042EC07 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A10000023026CED70042EC07 /* Configuration.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = WayToYou/WayToYou.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = Y3QR2X882L;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WayToYou/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -332,6 +375,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A10000043026CED70042EC07 /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/supabase/supabase-swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.46.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A10000053026CED70042EC07 /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000043026CED70042EC07 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = FB8ACF393026CED70042EC07 /* Project object */;
 }

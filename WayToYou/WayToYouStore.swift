@@ -1,31 +1,51 @@
 import Foundation
 import Observation
+import Supabase
 import SwiftUI
 
 /// 앱의 단일 상태. 예전엔 @AppStorage 값 여덟 개가 뷰에 흩어져 있었고
 /// 소포·시그널을 각각 한 개씩만 기억할 수 있었다. 여기서 전부 배열로 남긴다.
 @Observable
 final class WayToYouStore {
+    private(set) var myProfile: UserProfile?
+    private(set) var connectionStatus: ConnectionStatus
     private(set) var homeCityID: String
     private(set) var partnerCityID: String
     private(set) var parcels: [Parcel]
     private(set) var signals: [SignalEvent]
+    private(set) var backendIsReady = false
+    private(set) var connectionIsWorking = false
+    private(set) var connectionMessage: String?
 
     /// 서버가 없는 동안 상대 쪽 반응을 흉내 낸다.
     /// 배송 시간도 압축돼서 전체 루프를 몇 분 안에 볼 수 있다.
     var demoMode: Bool {
         didSet {
             guard demoMode != oldValue else { return }
-            defaults.set(demoMode, forKey: Key.demoMode)
+            defaults.set(demoMode, forKey: storageKey(Key.demoMode))
         }
     }
 
     var homeCity: CoupleCity { CoupleCity.city(id: homeCityID) }
     var partnerCity: CoupleCity { CoupleCity.city(id: partnerCityID) }
+    var partnerProfile: UserProfile? {
+        guard let myProfile,
+              case .connected(let connection) = connectionStatus else { return nil }
+        return connection.partner(for: myProfile.id)
+    }
+    var isConnected: Bool {
+        if case .connected = connectionStatus { return true }
+        return false
+    }
 
     private let defaults: UserDefaults
+    private let localConnectionService: any ConnectionServicing
+    private var backendConnectionService: SupabaseConnectionService?
+    private var activeUserID: UUID?
 
     private enum Key {
+        static let myProfile = "wty.myProfile"
+        static let connectionStatus = "wty.connectionStatus"
         static let home = "wty.homeCityID"
         static let partner = "wty.partnerCityID"
         static let parcels = "wty.parcels"
@@ -47,13 +67,34 @@ final class WayToYouStore {
         static let signalReplyAfter: TimeInterval = 40 * 60
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        connectionService: any ConnectionServicing = LocalConnectionService()
+    ) {
         self.defaults = defaults
+        self.localConnectionService = connectionService
+        myProfile = Self.decode(UserProfile.self, from: defaults.data(forKey: Key.myProfile))
+        connectionStatus = Self.decode(
+            ConnectionStatus.self,
+            from: defaults.data(forKey: Key.connectionStatus)
+        ) ?? .notConnected
         homeCityID = defaults.string(forKey: Key.home) ?? "seoul"
         partnerCityID = defaults.string(forKey: Key.partner) ?? "paris"
         demoMode = defaults.object(forKey: Key.demoMode) as? Bool ?? true
         parcels = Self.decode([Parcel].self, from: defaults.data(forKey: Key.parcels)) ?? []
         signals = Self.decode([SignalEvent].self, from: defaults.data(forKey: Key.signals)) ?? []
+
+        if let myProfile {
+            homeCityID = myProfile.cityID
+        }
+        if let partnerProfile = Self.partnerProfile(in: connectionStatus, for: myProfile?.id) {
+            partnerCityID = partnerProfile.cityID
+        }
+        if case .inviting(let invitation) = connectionStatus,
+           invitation.isExpired(at: .now) {
+            connectionStatus = .notConnected
+            defaults.set(Self.encode(connectionStatus), forKey: Key.connectionStatus)
+        }
     }
 
     // MARK: - Derived state
@@ -133,6 +174,153 @@ final class WayToYouStore {
 
     // MARK: - Intents
 
+    /// 인증 계정마다 로컬 캐시를 분리하고, 서버의 최신 프로필·연결 상태를 불러온다.
+    func activateBackend(client: SupabaseClient, userID: UUID) async {
+        backendIsReady = false
+        backendConnectionService = SupabaseConnectionService(client: client)
+
+        if activeUserID != userID {
+            activeUserID = userID
+            loadActiveUserState()
+        }
+
+        await refreshConnection()
+        backendIsReady = true
+    }
+
+    func saveProfile(displayName: String, cityID: String) {
+        let cleanedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedName.isEmpty else { return }
+
+        if var profile = myProfile {
+            profile.displayName = cleanedName
+            profile.cityID = cityID
+            myProfile = profile
+        } else {
+            myProfile = UserProfile(
+                id: activeUserID ?? UUID(),
+                displayName: cleanedName,
+                cityID: cityID
+            )
+        }
+        homeCityID = cityID
+        synchronizeMyProfileIntoConnection()
+        save()
+    }
+
+    @discardableResult
+    func saveProfileToBackend(displayName: String, cityID: String) async -> Bool {
+        let cleanedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedName.isEmpty, let backendConnectionService else { return false }
+
+        connectionIsWorking = true
+        connectionMessage = nil
+        defer { connectionIsWorking = false }
+
+        do {
+            let profile = try await backendConnectionService.saveProfile(
+                displayName: cleanedName,
+                cityID: cityID
+            )
+            myProfile = profile
+            homeCityID = profile.cityID
+            synchronizeMyProfileIntoConnection()
+            save()
+            return true
+        } catch {
+            connectionMessage = Self.friendlyConnectionError(error)
+            return false
+        }
+    }
+
+    func createInvitation() async {
+        guard myProfile != nil, let backendConnectionService else { return }
+
+        connectionIsWorking = true
+        connectionMessage = nil
+        defer { connectionIsWorking = false }
+
+        do {
+            connectionStatus = .inviting(try await backendConnectionService.createInvitation())
+            save()
+        } catch {
+            connectionMessage = Self.friendlyConnectionError(error)
+        }
+    }
+
+    func createPreviewInvitation(now: Date = .now) {
+        guard let myProfile else { return }
+        connectionStatus = .inviting(localConnectionService.makeInvite(for: myProfile, at: now))
+        save()
+    }
+
+    func cancelInvitation() async {
+        guard case .inviting(let invitation) = connectionStatus,
+              let backendConnectionService else { return }
+
+        connectionIsWorking = true
+        connectionMessage = nil
+        defer { connectionIsWorking = false }
+
+        do {
+            let state = try await backendConnectionService.cancelInvitation(id: invitation.id)
+            applyRemoteConnectionState(state)
+        } catch {
+            connectionMessage = Self.friendlyConnectionError(error)
+        }
+    }
+
+    @discardableResult
+    func acceptInvitation(code: String) async -> Bool {
+        guard let backendConnectionService else { return false }
+
+        connectionIsWorking = true
+        connectionMessage = nil
+        defer { connectionIsWorking = false }
+
+        do {
+            let state = try await backendConnectionService.acceptInvitation(code: code)
+            if let errorCode = state.error {
+                connectionMessage = Self.friendlyConnectionError(code: errorCode)
+                return false
+            }
+            applyRemoteConnectionState(state)
+            return isConnected
+        } catch {
+            connectionMessage = Self.friendlyConnectionError(error)
+            return false
+        }
+    }
+
+    /// 초대를 만든 기기는 상대가 입력했는지 짧게 폴링해 자동으로 홈을 연다.
+    func refreshConnection() async {
+        guard !connectionIsWorking, let backendConnectionService else { return }
+
+        do {
+            let state = try await backendConnectionService.connectionState()
+            applyRemoteConnectionState(state)
+            connectionMessage = nil
+        } catch {
+            connectionMessage = Self.friendlyConnectionError(error)
+        }
+    }
+
+    #if DEBUG
+    /// 두 번째 기기와 서버가 준비되기 전, 연결 완료 뒤의 기존 앱을 검증하는 전용 경로.
+    func simulatePartnerConnection(now: Date = .now) {
+        guard let myProfile else { return }
+        let fallbackCity = CoupleCity.presets.first { $0.id != myProfile.cityID && $0.id == partnerCityID }
+            ?? CoupleCity.presets.first { $0.id != myProfile.cityID }
+            ?? CoupleCity.city(id: "paris")
+        let partner = UserProfile(displayName: "상대", cityID: fallbackCity.id)
+        connectionStatus = .connected(
+            CoupleConnection(members: [myProfile, partner], connectedAt: now)
+        )
+        partnerCityID = partner.cityID
+        save()
+    }
+    #endif
+
     func sendParcel(title: String, message: String, wrap: ParcelWrap, now: Date = .now) {
         let parcel = Parcel(
             direction: .outgoing,
@@ -164,6 +352,20 @@ final class WayToYouStore {
         guard home != homeCityID || partner != partnerCityID else { return }
         homeCityID = home
         partnerCityID = partner
+        if var profile = myProfile {
+            profile.cityID = home
+            myProfile = profile
+        }
+        if case .connected(var connection) = connectionStatus,
+           let myProfile {
+            connection.members = connection.members.map { member in
+                if member.id == myProfile.id { return myProfile }
+                var partnerProfile = member
+                partnerProfile.cityID = partner
+                return partnerProfile
+            }
+            connectionStatus = .connected(connection)
+        }
         // 경로가 바뀌면 아직 하늘에 있는 소포는 갈 곳을 잃는다. 도착 처리해서 기록에 남긴다.
         let now = Date()
         for index in parcels.indices where parcels[index].isActive(at: now) {
@@ -304,10 +506,12 @@ final class WayToYouStore {
     }
 
     private func save() {
-        defaults.set(homeCityID, forKey: Key.home)
-        defaults.set(partnerCityID, forKey: Key.partner)
-        defaults.set(Self.encode(parcels), forKey: Key.parcels)
-        defaults.set(Self.encode(signals), forKey: Key.signals)
+        defaults.set(Self.encode(myProfile), forKey: storageKey(Key.myProfile))
+        defaults.set(Self.encode(connectionStatus), forKey: storageKey(Key.connectionStatus))
+        defaults.set(homeCityID, forKey: storageKey(Key.home))
+        defaults.set(partnerCityID, forKey: storageKey(Key.partner))
+        defaults.set(Self.encode(parcels), forKey: storageKey(Key.parcels))
+        defaults.set(Self.encode(signals), forKey: storageKey(Key.signals))
     }
 
     private static func encode<T: Encodable>(_ value: T) -> Data? {
@@ -317,6 +521,117 @@ final class WayToYouStore {
     private static func decode<T: Decodable>(_ type: T.Type, from data: Data?) -> T? {
         guard let data else { return nil }
         return try? JSONDecoder().decode(type, from: data)
+    }
+
+    private func synchronizeMyProfileIntoConnection() {
+        guard let myProfile,
+              case .connected(var connection) = connectionStatus else { return }
+        connection.members = connection.members.map { member in
+            member.id == myProfile.id ? myProfile : member
+        }
+        connectionStatus = .connected(connection)
+    }
+
+    private func storageKey(_ base: String) -> String {
+        guard let activeUserID else { return base }
+        return "wty.user.\(activeUserID.uuidString).\(base)"
+    }
+
+    private func loadActiveUserState() {
+        myProfile = Self.decode(UserProfile.self, from: defaults.data(forKey: storageKey(Key.myProfile)))
+        connectionStatus = Self.decode(
+            ConnectionStatus.self,
+            from: defaults.data(forKey: storageKey(Key.connectionStatus))
+        ) ?? .notConnected
+        homeCityID = defaults.string(forKey: storageKey(Key.home)) ?? "seoul"
+        partnerCityID = defaults.string(forKey: storageKey(Key.partner)) ?? "paris"
+        demoMode = defaults.object(forKey: storageKey(Key.demoMode)) as? Bool ?? true
+        parcels = Self.decode([Parcel].self, from: defaults.data(forKey: storageKey(Key.parcels))) ?? []
+        signals = Self.decode([SignalEvent].self, from: defaults.data(forKey: storageKey(Key.signals))) ?? []
+
+        if let myProfile {
+            homeCityID = myProfile.cityID
+        }
+        if let partner = Self.partnerProfile(in: connectionStatus, for: myProfile?.id) {
+            partnerCityID = partner.cityID
+        }
+        if case .inviting(let invitation) = connectionStatus,
+           invitation.isExpired(at: .now) {
+            connectionStatus = .notConnected
+        }
+    }
+
+    private func applyRemoteConnectionState(_ state: RemoteConnectionState) {
+        if let profile = state.me?.profile {
+            myProfile = profile
+            homeCityID = profile.cityID
+        }
+
+        switch state.status {
+        case "connected":
+            guard let me = state.me?.profile,
+                  let partner = state.partner?.profile,
+                  let connectionID = state.connectionID,
+                  let connectedAt = state.connectedAt else { return }
+            myProfile = me
+            homeCityID = me.cityID
+            partnerCityID = partner.cityID
+            connectionStatus = .connected(
+                CoupleConnection(
+                    id: connectionID,
+                    members: [me, partner],
+                    connectedAt: connectedAt
+                )
+            )
+
+        case "inviting":
+            if case .inviting(let localInvite) = connectionStatus,
+               localInvite.id == state.inviteID,
+               !localInvite.isExpired(at: .now) {
+                connectionStatus = .inviting(localInvite)
+            } else {
+                // 서버는 코드를 해시로만 보관하므로, 이 기기에 원문이 없으면 새 코드를 만든다.
+                connectionStatus = .notConnected
+            }
+
+        default:
+            connectionStatus = .notConnected
+        }
+
+        save()
+    }
+
+    private static func friendlyConnectionError(_ error: Error) -> String {
+        if let postgrestError = error as? PostgrestError {
+            return friendlyConnectionError(code: postgrestError.message)
+        }
+        return "연결 상태를 확인하지 못했어요. 잠시 후 다시 시도해주세요."
+    }
+
+    private static func friendlyConnectionError(code: String) -> String {
+        switch code {
+        case "invalid_code":
+            "코드가 올바르지 않거나 만료됐어요."
+        case "rate_limited":
+            "입력 횟수가 많아요. 10분 뒤 다시 시도해주세요."
+        case "already_connected":
+            "이미 다른 상대와 연결되어 있어요."
+        case "profile_required":
+            "먼저 내 이름과 도시를 저장해주세요."
+        case "invalid_display_name", "invalid_city":
+            "입력한 프로필 정보를 다시 확인해주세요."
+        default:
+            "서버 연결을 완료하지 못했어요. 잠시 후 다시 시도해주세요."
+        }
+    }
+
+    private static func partnerProfile(
+        in status: ConnectionStatus,
+        for profileID: UUID?
+    ) -> UserProfile? {
+        guard let profileID,
+              case .connected(let connection) = status else { return nil }
+        return connection.partner(for: profileID)
     }
 }
 

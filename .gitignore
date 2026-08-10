@@ -1,0 +1,3 @@
+# Local Supabase configuration. The publishable key is client-safe, but keeping
+# environment values out of commits prevents accidental secret-key substitution.
+Config/SupabaseSecrets.xcconfig
