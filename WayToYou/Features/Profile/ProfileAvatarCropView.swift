@@ -11,52 +11,56 @@ struct ProfileAvatarCropView: View {
     @State private var saveMessage: String?
 
     var body: some View {
-        GeometryReader { proxy in
-            let topInset = proxy.safeAreaInsets.top
-            let bottomInset = proxy.safeAreaInsets.bottom
-            let headerHeight: CGFloat = 82
-            let availableHeight = proxy.size.height
-                - topInset
-                - bottomInset
-                - headerHeight
-                - 32
-            let cropSide = max(min(proxy.size.width, availableHeight), 160)
+        NavigationStack {
+            GeometryReader { proxy in
+                let cropSide = max(min(proxy.size.width, proxy.size.height - 32), 160)
 
-            ZStack {
-                Color.black.ignoresSafeArea()
-
-                Color.white
-                    .frame(height: topInset + headerHeight)
-                    .frame(maxHeight: .infinity, alignment: .top)
-                    .ignoresSafeArea(edges: .top)
-
-                VStack(spacing: 0) {
-                    header
-                        .frame(height: headerHeight)
-
-                    Spacer(minLength: 16)
+                ZStack {
+                    Color.black.ignoresSafeArea()
 
                     cropCanvas(size: cropSide)
 
-                    Spacer(minLength: 16)
-                }
-                .padding(.top, topInset)
-                .padding(.bottom, bottomInset)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if let saveMessage {
-                    Text(saveMessage)
-                        .font(.rounded(.caption, .medium))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16)
-                        .frame(height: 40)
-                        .background(Color.white.opacity(0.14), in: Capsule())
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, bottomInset + 20)
-                        .frame(maxHeight: .infinity, alignment: .bottom)
+                    if let saveMessage {
+                        Text(saveMessage)
+                            .font(.rounded(.caption, .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .frame(height: 40)
+                            .background(Color.white.opacity(0.14), in: Capsule())
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, 20)
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                    }
                 }
             }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("취소") {
+                        onComplete(nil)
+                    }
+                    .disabled(isSaving)
+                }
+
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        save()
+                    } label: {
+                        if isSaving {
+                            ProgressView()
+                        } else {
+                            Text("완료")
+                        }
+                    }
+                    .disabled(isSaving)
+                }
+            }
+            .toolbarBackground(Color.white, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.light, for: .navigationBar)
         }
+        .tint(.black)
         .preferredColorScheme(.light)
     }
 
@@ -74,68 +78,6 @@ struct ProfileAvatarCropView: View {
         }
         .frame(width: size, height: size)
         .clipped()
-    }
-
-    private var header: some View {
-        ZStack {
-            Text(title)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
-                .foregroundStyle(.black)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .padding(.horizontal, 88)
-
-            HStack {
-                circleButton(
-                    systemImage: "xmark",
-                    foreground: .black,
-                    background: Color(white: 0.95),
-                    accessibilityLabel: "취소"
-                ) {
-                    onComplete(nil)
-                }
-
-                Spacer()
-
-                circleButton(
-                    systemImage: "checkmark",
-                    foreground: .white,
-                    background: .black,
-                    accessibilityLabel: "이 사진 사용",
-                    showsProgress: isSaving
-                ) {
-                    save()
-                }
-                .disabled(isSaving)
-            }
-            .padding(.horizontal, 18)
-        }
-        .background(Color.white)
-    }
-
-    private func circleButton(
-        systemImage: String,
-        foreground: Color,
-        background: Color,
-        accessibilityLabel: String,
-        showsProgress: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Group {
-                if showsProgress {
-                    ProgressView().tint(foreground)
-                } else {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 23, weight: .semibold))
-                }
-            }
-            .foregroundStyle(foreground)
-            .frame(width: 56, height: 56)
-            .background(background, in: Circle())
-            .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
-        }
-        .accessibilityLabel(accessibilityLabel)
     }
 
     private func save() {
