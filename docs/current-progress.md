@@ -2,7 +2,7 @@
 
 작성일: 2026-08-11
 브랜치: `codex/product-plan-mvp`
-최신 커밋: `57cb5d3 style: refine avatar crop sheet background`
+최신 커밋: `58bb2e5 feat: add animated avatar success toast`
 
 ## 현재 방향
 
@@ -97,7 +97,9 @@
 - 네이티브 다크 시트와 iOS 내비게이션 컨트롤을 사용한다.
 - JPEG로 처리한 사진을 Supabase Storage에 업로드한다.
 - 온보딩과 `우리` 화면에서 프로필 사진을 표시한다.
-- 최신 크롭 UI는 아직 `승우의 iPhone`에서 재검증해야 한다.
+- 업로드 성공 시 `우리` 화면에 애니메이션 토스트를 표시한다.
+- 크롭 시트 내비게이션은 검은색 네이티브 스타일로 유지한다.
+- 최신 아바타 흐름은 아직 `승우의 iPhone`에서 재검증해야 한다.
 
 관련 커밋:
 
@@ -109,6 +111,8 @@
 - `948d4b3 fix: use native crop navigation controls`
 - `4663794 style: present avatar crop in native dark sheet`
 - `57cb5d3 style: refine avatar crop sheet background`
+- `65f3166 style: use black avatar crop navigation`
+- `58bb2e5 feat: add animated avatar success toast`
 
 ## Supabase 상태
 
