@@ -5,15 +5,17 @@ import Observation
 import OSLog
 import Supabase
 
+// 로그인 상태 6가지 정의 ( 상태는 enum으로 짜는 것이 건강한 코드 )
 enum BackendSessionState: Equatable {
-    case idle
-    case restoring
-    case signedOut
-    case signingIn
-    case authenticated(userID: UUID)
-    case unavailable
+    case idle           // 아직 아무것도 안 함
+    case restoring      // 저장된 로그인 확인 중
+    case signedOut      // 로그인 필요
+    case signingIn      // 로그인 진행중
+    case authenticated(userID: UUID) // 로그인 완료 + 누구인지
+    case unavailable    // 설정 오류 / 서버 장애
 }
 
+// 설정 오류 3가지 정의
 enum SupabaseConfigurationError: LocalizedError {
     case missingValue
     case invalidURL
@@ -65,6 +67,7 @@ final class SupabaseSessionController {
     }
 
     /// Keychain의 세션을 복원한다. 익명 세션은 이 앱의 인증 방식으로 인정하지 않는다.
+    /// 앱을 켤 때마다 저장된 로그인 정보가 있나 확인하는 작업, Keychain에 저장한 토큰을 꺼내서 Restore
     func restoreSession() async {
         guard let client, state == .idle else { return }
 
@@ -214,6 +217,7 @@ final class SupabaseSessionController {
     }
 
     private static func makeClient(bundle: Bundle) throws -> SupabaseClient {
+        // 검사 1 : 값이 있나
         guard let urlText = bundle.object(forInfoDictionaryKey: "SUPABASE_URL") as? String,
               let key = bundle.object(forInfoDictionaryKey: "SUPABASE_PUBLISHABLE_KEY") as? String,
               !urlText.isEmpty,
@@ -221,18 +225,21 @@ final class SupabaseSessionController {
             throw SupabaseConfigurationError.missingValue
         }
 
+        // 검사 2 : 주소가 정상인가
         guard let url = URL(string: urlText),
               url.scheme == "https",
               url.host?.hasSuffix(".supabase.co") == true else {
             throw SupabaseConfigurationError.invalidURL
         }
 
+        // 검사 3 : 안전한 키인가
         guard key.hasPrefix("sb_publishable_"),
               !key.hasPrefix("sb_secret_"),
               !key.localizedCaseInsensitiveContains("service_role") else {
             throw SupabaseConfigurationError.unsafeKey
         }
 
+        // SupabaseClient 만들기
         return SupabaseClient(
             supabaseURL: url,
             supabaseKey: key,
