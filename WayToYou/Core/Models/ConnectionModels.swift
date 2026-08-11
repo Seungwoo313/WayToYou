@@ -6,15 +6,17 @@ import Foundation
 struct UserProfile: Identifiable, Codable, Hashable {
     let id: UUID
     var displayName: String
-    var cityID: String
+    var endpoint: RouteEndpoint
 
-    init(id: UUID = UUID(), displayName: String, cityID: String) {
+    init(id: UUID = UUID(), displayName: String, endpoint: RouteEndpoint) {
         self.id = id
         self.displayName = displayName
-        self.cityID = cityID
+        self.endpoint = endpoint
     }
 
-    var city: CoupleCity { CoupleCity.city(id: cityID) }
+    var city: CoupleCity { endpoint.city.coupleCity }
+    var cityID: String { endpoint.city.id }
+    var airport: RouteAirport { endpoint.airport }
 }
 
 // MARK: - Connection

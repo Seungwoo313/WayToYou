@@ -26,8 +26,8 @@ final class WayToYouStore {
         }
     }
 
-    var homeCity: CoupleCity { CoupleCity.city(id: homeCityID) }
-    var partnerCity: CoupleCity { CoupleCity.city(id: partnerCityID) }
+    var homeCity: CoupleCity { myProfile?.city ?? CoupleCity.city(id: homeCityID) }
+    var partnerCity: CoupleCity { partnerProfile?.city ?? CoupleCity.city(id: partnerCityID) }
     var partnerProfile: UserProfile? {
         guard let myProfile,
               case .connected(let connection) = connectionStatus else { return nil }
@@ -36,6 +36,11 @@ final class WayToYouStore {
     var isConnected: Bool {
         if case .connected = connectionStatus { return true }
         return false
+    }
+    var coupleRoute: CoupleRoute? {
+        guard let mine = myProfile?.endpoint,
+              let partner = partnerProfile?.endpoint else { return nil }
+        return CoupleRoute(mine: mine, partner: partner)
     }
 
     private let defaults: UserDefaults
@@ -188,28 +193,28 @@ final class WayToYouStore {
         backendIsReady = true
     }
 
-    func saveProfile(displayName: String, cityID: String) {
+    func saveProfile(displayName: String, endpoint: RouteEndpoint) {
         let cleanedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedName.isEmpty else { return }
 
         if var profile = myProfile {
             profile.displayName = cleanedName
-            profile.cityID = cityID
+            profile.endpoint = endpoint
             myProfile = profile
         } else {
             myProfile = UserProfile(
                 id: activeUserID ?? UUID(),
                 displayName: cleanedName,
-                cityID: cityID
+                endpoint: endpoint
             )
         }
-        homeCityID = cityID
+        homeCityID = endpoint.city.id
         synchronizeMyProfileIntoConnection()
         save()
     }
 
     @discardableResult
-    func saveProfileToBackend(displayName: String, cityID: String) async -> Bool {
+    func saveProfileToBackend(displayName: String, endpoint: RouteEndpoint) async -> Bool {
         let cleanedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedName.isEmpty, let backendConnectionService else { return false }
 
@@ -220,7 +225,7 @@ final class WayToYouStore {
         do {
             let profile = try await backendConnectionService.saveProfile(
                 displayName: cleanedName,
-                cityID: cityID
+                endpoint: endpoint
             )
             myProfile = profile
             homeCityID = profile.cityID
@@ -305,22 +310,6 @@ final class WayToYouStore {
         }
     }
 
-    #if DEBUG
-    /// 두 번째 기기와 서버가 준비되기 전, 연결 완료 뒤의 기존 앱을 검증하는 전용 경로.
-    func simulatePartnerConnection(now: Date = .now) {
-        guard let myProfile else { return }
-        let fallbackCity = CoupleCity.presets.first { $0.id != myProfile.cityID && $0.id == partnerCityID }
-            ?? CoupleCity.presets.first { $0.id != myProfile.cityID }
-            ?? CoupleCity.city(id: "paris")
-        let partner = UserProfile(displayName: "상대", cityID: fallbackCity.id)
-        connectionStatus = .connected(
-            CoupleConnection(members: [myProfile, partner], connectedAt: now)
-        )
-        partnerCityID = partner.cityID
-        save()
-    }
-    #endif
-
     func sendParcel(title: String, message: String, wrap: ParcelWrap, now: Date = .now) {
         let parcel = Parcel(
             direction: .outgoing,
@@ -345,32 +334,6 @@ final class WayToYouStore {
     func sendSignal(_ signal: CoupleSignal, now: Date = .now) {
         signals.append(SignalEvent(signal: signal, direction: .outgoing, sentAt: now))
         trimSignals()
-        save()
-    }
-
-    func updateCities(home: String, partner: String) {
-        guard home != homeCityID || partner != partnerCityID else { return }
-        homeCityID = home
-        partnerCityID = partner
-        if var profile = myProfile {
-            profile.cityID = home
-            myProfile = profile
-        }
-        if case .connected(var connection) = connectionStatus,
-           let myProfile {
-            connection.members = connection.members.map { member in
-                if member.id == myProfile.id { return myProfile }
-                var partnerProfile = member
-                partnerProfile.cityID = partner
-                return partnerProfile
-            }
-            connectionStatus = .connected(connection)
-        }
-        // 경로가 바뀌면 아직 하늘에 있는 소포는 갈 곳을 잃는다. 도착 처리해서 기록에 남긴다.
-        let now = Date()
-        for index in parcels.indices where parcels[index].isActive(at: now) {
-            parcels[index].arrivesAt = now
-        }
         save()
     }
 

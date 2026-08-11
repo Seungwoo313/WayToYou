@@ -6,20 +6,19 @@ struct ConnectionOnboardingView: View {
     @Bindable var store: WayToYouStore
 
     @State private var draftName: String
-    @State private var draftCityID: String
-    @State private var isPickingCity = false
+    @State private var draftEndpoint: RouteEndpoint?
+    @State private var isPickingEndpoint = false
     @State private var isEditingProfile = false
     @State private var isEnteringCode = false
 
     init(store: WayToYouStore, suggestedName: String? = nil) {
         self.store = store
         _draftName = State(initialValue: store.myProfile?.displayName ?? suggestedName ?? "")
-        _draftCityID = State(initialValue: store.myProfile?.cityID ?? store.homeCityID)
+        _draftEndpoint = State(initialValue: store.myProfile?.endpoint)
     }
 
-    private var draftCity: CoupleCity { CoupleCity.city(id: draftCityID) }
     private var canSaveProfile: Bool {
-        !draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draftEndpoint != nil
     }
 
     var body: some View {
@@ -43,12 +42,10 @@ struct ConnectionOnboardingView: View {
                 .scrollDismissesKeyboard(.interactively)
             }
             .toolbarBackground(.hidden, for: .navigationBar)
-            .sheet(isPresented: $isPickingCity) {
-                CityPickerList(
-                    title: "나의 도시",
-                    selection: $draftCityID,
-                    excluding: ""
-                )
+            .sheet(isPresented: $isPickingEndpoint) {
+                RouteEndpointPicker { endpoint in
+                    draftEndpoint = endpoint
+                }
                 .presentationDetents([.large])
                 .presentationBackground(Palette.space)
             }
@@ -67,7 +64,7 @@ struct ConnectionOnboardingView: View {
             header(
                 step: "1 / 2",
                 title: "먼저, 나를 알려주세요",
-                detail: "상대에게 보일 이름과 도시를 설정해요. 정확한 위치는 공유하지 않아요."
+                detail: "상대에게 보일 이름과, 두 사람의 Route가 시작될 도시와 공항을 설정해요."
             )
 
             VStack(alignment: .leading, spacing: Metric.l) {
@@ -86,23 +83,24 @@ struct ConnectionOnboardingView: View {
                 }
 
                 VStack(alignment: .leading, spacing: Metric.s) {
-                    Text("도시")
+                    Text("도시와 공항")
                         .font(.rounded(.caption, .semibold))
                         .foregroundStyle(Palette.textTertiary)
 
-                    Button { isPickingCity = true } label: {
+                    Button { isPickingEndpoint = true } label: {
                         HStack(spacing: Metric.m) {
-                            Circle()
-                                .fill(Palette.me)
-                                .frame(width: 8, height: 8)
-                                .shadow(color: Palette.me.opacity(0.8), radius: 5)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(draftCity.name)
+                            Image(systemName: "airplane.circle.fill")
+                                .font(.system(size: 24))
+                                .foregroundStyle(Palette.me)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(draftEndpoint?.city.name ?? "도시와 공항 선택")
                                     .font(.rounded(.body, .semibold))
                                     .foregroundStyle(Palette.textPrimary)
-                                Text(draftCity.country)
+                                Text(draftEndpoint.map { "\($0.airport.name) · \($0.city.country)" }
+                                    ?? "현재 위치로 추천받거나 직접 검색할 수 있어요")
                                     .font(.rounded(.caption))
                                     .foregroundStyle(Palette.textTertiary)
+                                    .lineLimit(2)
                             }
                             Spacer()
                             Image(systemName: "chevron.right")
@@ -125,9 +123,10 @@ struct ConnectionOnboardingView: View {
 
             Button {
                 Task {
+                    guard let draftEndpoint else { return }
                     let saved = await store.saveProfileToBackend(
                         displayName: draftName,
-                        cityID: draftCityID
+                        endpoint: draftEndpoint
                     )
                     if saved {
                         isEditingProfile = false
@@ -200,7 +199,7 @@ struct ConnectionOnboardingView: View {
 
             Button {
                 draftName = store.myProfile?.displayName ?? ""
-                draftCityID = store.myProfile?.cityID ?? store.homeCityID
+                draftEndpoint = store.myProfile?.endpoint
                 isEditingProfile = true
             } label: {
                 Text("내 정보 수정")
@@ -334,6 +333,9 @@ struct ConnectionOnboardingView: View {
                 Text("\(profile.city.name), \(profile.city.country)")
                     .font(.rounded(.subheadline))
                     .foregroundStyle(Palette.textSecondary)
+                Text(profile.airport.name)
+                    .font(.rounded(.caption))
+                    .foregroundStyle(Palette.textTertiary)
             }
             Spacer()
             Image(systemName: "checkmark.circle.fill")
@@ -444,51 +446,8 @@ private extension String {
     }
 }
 
-private enum OnboardingPreviewStage {
-    case profile
-    case connection
-    case invitation
-}
-
-private struct OnboardingPreviewConnectionService: ConnectionServicing {
-    func makeInvite(for profile: UserProfile, at date: Date) -> ConnectionInvite {
-        ConnectionInvite(
-            code: "428617",
-            createdByID: profile.id,
-            createdAt: date,
-            expiresAt: date.addingTimeInterval(24 * 60 * 60)
-        )
-    }
-}
-
-@MainActor
-private func onboardingPreviewStore(_ stage: OnboardingPreviewStage) -> WayToYouStore {
+#Preview("내 정보") {
     let defaults = UserDefaults(suiteName: "wty.onboarding.preview.\(UUID().uuidString)")!
-    let store = WayToYouStore(
-        defaults: defaults,
-        connectionService: OnboardingPreviewConnectionService()
-    )
-
-    guard stage != .profile else { return store }
-    store.saveProfile(displayName: "승우", cityID: "seoul")
-
-    if stage == .invitation {
-        store.createPreviewInvitation()
-    }
-    return store
-}
-
-#Preview("1 · 내 정보") {
-    ConnectionOnboardingView(store: onboardingPreviewStore(.profile))
-        .preferredColorScheme(.dark)
-}
-
-#Preview("2 · 연결 방법") {
-    ConnectionOnboardingView(store: onboardingPreviewStore(.connection))
-        .preferredColorScheme(.dark)
-}
-
-#Preview("3 · 초대 대기") {
-    ConnectionOnboardingView(store: onboardingPreviewStore(.invitation))
+    ConnectionOnboardingView(store: WayToYouStore(defaults: defaults))
         .preferredColorScheme(.dark)
 }

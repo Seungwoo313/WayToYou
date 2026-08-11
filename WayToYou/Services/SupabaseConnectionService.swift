@@ -4,16 +4,17 @@ import Supabase
 struct RemoteProfile: Decodable {
     let id: UUID
     let displayName: String
-    let cityID: String
+    let endpoint: RouteEndpoint?
 
     enum CodingKeys: String, CodingKey {
         case id
         case displayName = "display_name"
-        case cityID = "city_id"
+        case endpoint = "route_endpoint"
     }
 
-    var profile: UserProfile {
-        UserProfile(id: id, displayName: displayName, cityID: cityID)
+    var profile: UserProfile? {
+        guard let endpoint else { return nil }
+        return UserProfile(id: id, displayName: displayName, endpoint: endpoint)
     }
 }
 
@@ -75,20 +76,21 @@ struct SupabaseConnectionService {
             .value
     }
 
-    func saveProfile(displayName: String, cityID: String) async throws -> UserProfile {
+    func saveProfile(displayName: String, endpoint: RouteEndpoint) async throws -> UserProfile {
         struct Parameters: Encodable {
             let p_display_name: String
-            let p_city_id: String
+            let p_route_endpoint: RouteEndpoint
         }
 
         let remote: RemoteProfile = try await client
             .rpc(
                 "wty_save_profile",
-                params: Parameters(p_display_name: displayName, p_city_id: cityID)
+                params: Parameters(p_display_name: displayName, p_route_endpoint: endpoint)
             )
             .execute()
             .value
-        return remote.profile
+        guard let profile = remote.profile else { throw SupabaseConnectionError.incompleteProfile }
+        return profile
     }
 
     func createInvitation() async throws -> ConnectionInvite {
@@ -114,4 +116,8 @@ struct SupabaseConnectionService {
             .execute()
             .value
     }
+}
+
+enum SupabaseConnectionError: Error {
+    case incompleteProfile
 }
