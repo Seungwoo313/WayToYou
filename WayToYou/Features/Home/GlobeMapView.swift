@@ -12,6 +12,12 @@ struct GlobeProfileMarker: Identifiable, Equatable {
     let displayName: String
     let city: CoupleCity
     let avatarData: Data?
+    let signal: CoupleSignal?
+}
+
+struct GlobeMarkerSelection: Equatable {
+    let id: GlobeProfileMarker.ID
+    let anchor: CGPoint
 }
 
 /// MapKit의 기본 팬, 핀치, 관성을 그대로 사용하는 풀스크린 위성 지구.
@@ -19,12 +25,12 @@ struct GlobeProfileMarker: Identifiable, Equatable {
 struct GlobeMapView: UIViewRepresentable {
     let myMarker: GlobeProfileMarker
     let partnerMarker: GlobeProfileMarker
-    @Binding var selectedMarkerID: GlobeProfileMarker.ID?
+    @Binding var selection: GlobeMarkerSelection?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             cameraRouteID: cameraRouteID,
-            selectedMarkerID: $selectedMarkerID
+            selection: $selection
         )
     }
 
@@ -59,13 +65,13 @@ struct GlobeMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ mapView: NativeGlobeMapView, context: Context) {
-        context.coordinator.selectedMarkerID = $selectedMarkerID
+        context.coordinator.selection = $selection
         if context.coordinator.cameraRouteID != cameraRouteID {
             context.coordinator.cameraRouteID = cameraRouteID
             context.coordinator.requestInitialFraming(cameraFraming)
         }
 
-        // 사진과 이름은 매 갱신마다 annotation에 반영하되 카메라에는 영향을 주지 않는다.
+        // 사진, 이름과 Signal은 annotation에 반영하되 카메라에는 영향을 주지 않는다.
         context.coordinator.sync(markers: markers, in: mapView)
     }
 
@@ -73,6 +79,7 @@ struct GlobeMapView: UIViewRepresentable {
         _ mapView: NativeGlobeMapView,
         coordinator: Coordinator
     ) {
+        coordinator.disconnect()
         mapView.onUsableLayout = nil
         mapView.delegate = nil
     }
@@ -259,22 +266,26 @@ struct GlobeMapView: UIViewRepresentable {
 
     final class Coordinator: NSObject, MKMapViewDelegate {
         var cameraRouteID: String
-        var selectedMarkerID: Binding<GlobeProfileMarker.ID?>
+        var selection: Binding<GlobeMarkerSelection?>
 
         private weak var mapView: NativeGlobeMapView?
         private var annotationsByID: [GlobeProfileMarker.ID: GlobeProfileAnnotation] = [:]
         private var latestMarkers: [GlobeProfileMarker] = []
         private var requestedFraming: CameraFraming?
         private var needsInitialFraming = false
+        private var defersMarkerSyncUntilCameraCommit = false
         private var framingGeneration = 0
+        private var markerPlacementGeneration = 0
+        private var markerPlacementFramesRemaining = 0
+        private var markerPlacementDisplayLink: CADisplayLink?
         private var isSynchronizingSelection = false
 
         init(
             cameraRouteID: String,
-            selectedMarkerID: Binding<GlobeProfileMarker.ID?>
+            selection: Binding<GlobeMarkerSelection?>
         ) {
             self.cameraRouteID = cameraRouteID
-            self.selectedMarkerID = selectedMarkerID
+            self.selection = selection
         }
 
         func connect(to mapView: NativeGlobeMapView) {
@@ -285,9 +296,16 @@ struct GlobeMapView: UIViewRepresentable {
             }
         }
 
+        func disconnect() {
+            markerPlacementDisplayLink?.invalidate()
+            markerPlacementDisplayLink = nil
+            mapView = nil
+        }
+
         func sync(markers: [GlobeProfileMarker], in mapView: MKMapView) {
             latestMarkers = markers
-            guard !needsInitialFraming else { return }
+            guard !needsInitialFraming,
+                  !defersMarkerSyncUntilCameraCommit else { return }
             applyLatestMarkers(in: mapView)
         }
 
@@ -320,7 +338,7 @@ struct GlobeMapView: UIViewRepresentable {
             let selectedAnnotation = mapView.selectedAnnotations
                 .compactMap { $0 as? GlobeProfileAnnotation }
                 .first
-            guard selectedAnnotation?.id != selectedMarkerID.wrappedValue else { return }
+            guard selectedAnnotation?.id != selection.wrappedValue?.id else { return }
 
             isSynchronizingSelection = true
             defer { isSynchronizingSelection = false }
@@ -328,7 +346,7 @@ struct GlobeMapView: UIViewRepresentable {
             if let selectedAnnotation {
                 mapView.deselectAnnotation(selectedAnnotation, animated: false)
             }
-            if let selectedID = selectedMarkerID.wrappedValue,
+            if let selectedID = selection.wrappedValue?.id,
                let annotation = annotationsByID[selectedID] {
                 mapView.selectAnnotation(annotation, animated: false)
             }
@@ -337,6 +355,9 @@ struct GlobeMapView: UIViewRepresentable {
         func requestInitialFraming(_ framing: CameraFraming) {
             requestedFraming = framing
             needsInitialFraming = true
+            defersMarkerSyncUntilCameraCommit = true
+            markerPlacementDisplayLink?.invalidate()
+            markerPlacementDisplayLink = nil
             framingGeneration += 1
 
             guard let mapView else { return }
@@ -364,15 +385,34 @@ struct GlobeMapView: UIViewRepresentable {
             camera.centerCoordinateDistance *= 1000
             mapView.setCamera(camera, animated: false)
 
-            // 최종 카메라가 반영된 다음 annotation을 추가해야 초기 가시성 계산이 지연되지 않는다.
-            let generation = framingGeneration
-            DispatchQueue.main.async { [weak self, weak mapView] in
-                guard let self,
-                      let mapView,
-                      !self.needsInitialFraming,
-                      self.framingGeneration == generation else { return }
-                self.applyLatestMarkers(in: mapView)
+            scheduleMarkerPlacement(afterDisplayFrames: 2)
+        }
+
+        private func scheduleMarkerPlacement(afterDisplayFrames frameCount: Int) {
+            markerPlacementDisplayLink?.invalidate()
+            markerPlacementGeneration = framingGeneration
+            markerPlacementFramesRemaining = max(frameCount, 1)
+            let displayLink = CADisplayLink(
+                target: self,
+                selector: #selector(advanceMarkerPlacement)
+            )
+            markerPlacementDisplayLink = displayLink
+            displayLink.add(to: .main, forMode: .common)
+        }
+
+        @objc private func advanceMarkerPlacement() {
+            guard markerPlacementFramesRemaining > 1 else {
+                markerPlacementDisplayLink?.invalidate()
+                markerPlacementDisplayLink = nil
+                guard let mapView,
+                      !needsInitialFraming,
+                      framingGeneration == markerPlacementGeneration else { return }
+                defersMarkerSyncUntilCameraCommit = false
+                mapView.layoutIfNeeded()
+                applyLatestMarkers(in: mapView)
+                return
             }
+            markerPlacementFramesRemaining -= 1
         }
 
         func mapView(
@@ -395,8 +435,11 @@ struct GlobeMapView: UIViewRepresentable {
         ) {
             guard !isSynchronizingSelection,
                   let annotation = view.annotation as? GlobeProfileAnnotation,
-                  selectedMarkerID.wrappedValue != annotation.id else { return }
-            selectedMarkerID.wrappedValue = annotation.id
+                  selection.wrappedValue?.id != annotation.id else { return }
+            selection.wrappedValue = GlobeMarkerSelection(
+                id: annotation.id,
+                anchor: mapView.convert(annotation.coordinate, toPointTo: mapView)
+            )
             UISelectionFeedbackGenerator().selectionChanged()
         }
 
@@ -412,8 +455,8 @@ struct GlobeMapView: UIViewRepresentable {
                       !mapView.selectedAnnotations.contains(where: {
                           $0 is GlobeProfileAnnotation
                       }),
-                      self.selectedMarkerID.wrappedValue == annotation.id else { return }
-                self.selectedMarkerID.wrappedValue = nil
+                      self.selection.wrappedValue?.id == annotation.id else { return }
+                self.selection.wrappedValue = nil
             }
         }
 
@@ -477,6 +520,8 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     private let avatarView = UIView()
     private let avatarImageView = UIImageView()
     private let fallbackLabel = UILabel()
+    private let signalBadgeView = UIView()
+    private let signalBadgeImageView = UIImageView()
 
     override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
@@ -488,6 +533,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         )
         backgroundColor = .clear
         isOpaque = false
+        clipsToBounds = false
         canShowCallout = false
         displayPriority = .required
         collisionMode = .circle
@@ -535,6 +581,16 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         fallbackLabel.textColor = .white
         fallbackLabel.textAlignment = .center
         avatarView.addSubview(fallbackLabel)
+
+        signalBadgeView.backgroundColor = .clear
+        addSubview(signalBadgeView)
+
+        signalBadgeImageView.contentMode = .center
+        signalBadgeImageView.layer.shadowColor = UIColor.black.cgColor
+        signalBadgeImageView.layer.shadowOpacity = 0.22
+        signalBadgeImageView.layer.shadowRadius = 1.5
+        signalBadgeImageView.layer.shadowOffset = CGSize(width: 0, height: 1)
+        signalBadgeView.addSubview(signalBadgeImageView)
     }
 
     @available(*, unavailable)
@@ -556,6 +612,14 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         selectionHaloView.layer.cornerRadius = selectionHaloView.bounds.width / 2
         avatarImageView.frame = avatarView.bounds
         fallbackLabel.frame = avatarView.bounds
+        let badgeSize: CGFloat = 24
+        signalBadgeView.frame = CGRect(
+            x: avatarView.frame.minX - badgeSize / 2 + 3,
+            y: avatarView.frame.maxY - badgeSize / 2 - 3,
+            width: badgeSize,
+            height: badgeSize
+        )
+        signalBadgeImageView.frame = signalBadgeView.bounds
 
         stemView.frame = CGRect(
             x: bounds.midX - 0.5,
@@ -579,6 +643,8 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         selectionHaloView.transform = .identity
         selectionHaloView.alpha = 0
         avatarImageView.image = nil
+        signalBadgeImageView.image = nil
+        signalBadgeView.isHidden = true
         fallbackLabel.text = nil
         accessibilityLabel = nil
         accessibilityValue = nil
@@ -653,19 +719,100 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     }
 
     func configure(with marker: GlobeProfileMarker) {
+        if let signal = marker.signal {
+            signalBadgeImageView.image = EmojiStickerRenderer.image(
+                for: signal.emoji
+            )
+            signalBadgeView.isHidden = false
+        } else {
+            signalBadgeImageView.image = nil
+            signalBadgeView.isHidden = true
+        }
+
         if let data = marker.avatarData, let image = UIImage(data: data) {
+            avatarView.backgroundColor = UIColor(white: 0.12, alpha: 1)
             avatarImageView.image = image
             avatarImageView.isHidden = false
             fallbackLabel.isHidden = true
         } else {
+            avatarView.backgroundColor = UIColor(white: 0.12, alpha: 1)
             avatarImageView.image = nil
             avatarImageView.isHidden = true
             fallbackLabel.text = ProfileAvatarImage.fallbackInitial(for: marker.displayName)
             fallbackLabel.isHidden = false
         }
 
-        accessibilityLabel = "\(marker.displayName), \(marker.city.name) 프로필"
+        let signalDescription = marker.signal.map { ", Signal \($0.title)" } ?? ""
+        accessibilityLabel = "\(marker.displayName), \(marker.city.name) 프로필\(signalDescription)"
         accessibilityHint = "두 번 탭하면 프로필 상태를 표시합니다"
+    }
+}
+
+/// 어떤 유니코드 이모지든 같은 크기와 외곽선 규칙으로 스티커 이미지로 만든다.
+private enum EmojiStickerRenderer {
+    private static var cache: [String: UIImage] = [:]
+
+    static func image(
+        for emoji: String,
+        pointSize: CGFloat = 15,
+        outlineWidth: CGFloat = 1.5
+    ) -> UIImage {
+        let scale = UIScreen.main.scale
+        let cacheKey = "\(emoji)-\(pointSize)-\(outlineWidth)-\(scale)"
+        if let cached = cache[cacheKey] {
+            return cached
+        }
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: pointSize)
+        ]
+        let measuredSize = (emoji as NSString).size(withAttributes: attributes)
+        let glyphSize = CGSize(
+            width: max(1, ceil(measuredSize.width)),
+            height: max(1, ceil(measuredSize.height))
+        )
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.opaque = false
+
+        let glyphRenderer = UIGraphicsImageRenderer(size: glyphSize, format: format)
+        let glyphImage = glyphRenderer.image { _ in
+            (emoji as NSString).draw(
+                in: CGRect(origin: .zero, size: glyphSize),
+                withAttributes: attributes
+            )
+        }
+        let silhouette = glyphRenderer.image { context in
+            glyphImage.draw(in: CGRect(origin: .zero, size: glyphSize))
+            context.cgContext.setBlendMode(.sourceIn)
+            context.cgContext.setFillColor(UIColor.white.cgColor)
+            context.cgContext.fill(CGRect(origin: .zero, size: glyphSize))
+        }
+
+        let padding = outlineWidth + 1
+        let outputSize = CGSize(
+            width: glyphSize.width + padding * 2,
+            height: glyphSize.height + padding * 2
+        )
+        let outputRenderer = UIGraphicsImageRenderer(size: outputSize, format: format)
+        let output = outputRenderer.image { context in
+            context.cgContext.interpolationQuality = .high
+            let origin = CGPoint(x: padding, y: padding)
+            let samples = 24
+            for index in 0..<samples {
+                let angle = CGFloat(index) / CGFloat(samples) * .pi * 2
+                silhouette.draw(
+                    at: CGPoint(
+                        x: origin.x + cos(angle) * outlineWidth,
+                        y: origin.y + sin(angle) * outlineWidth
+                    )
+                )
+            }
+            glyphImage.draw(at: origin)
+        }
+
+        cache[cacheKey] = output
+        return output
     }
 }
 
@@ -699,15 +846,17 @@ final class NativeGlobeMapView: MKMapView {
             id: .mine,
             displayName: "미나",
             city: CoupleCity.city(id: "seoul"),
-            avatarData: nil
+            avatarData: nil,
+            signal: .free
         ),
         partnerMarker: GlobeProfileMarker(
             id: .partner,
             displayName: "Sofia",
             city: CoupleCity.city(id: "paris"),
-            avatarData: nil
+            avatarData: nil,
+            signal: .resting
         ),
-        selectedMarkerID: .constant(nil)
+        selection: .constant(nil)
     )
     .ignoresSafeArea()
 }

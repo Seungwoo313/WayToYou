@@ -15,8 +15,9 @@ struct ContentView: View {
     @State private var pendingHeartCount = 0
     @State private var heartSequence = 0
     @State private var heartSendTask: Task<Void, Never>?
-    @State private var signalPulse = 0
-    @State private var selectedGlobeMarkerID: GlobeProfileMarker.ID?
+    @State private var signalToast: SignalEvent?
+    @State private var signalToastDismissTask: Task<Void, Never>?
+    @State private var selectedGlobeMarker: GlobeMarkerSelection?
     @Environment(\.scenePhase) private var scenePhase
     #if DEBUG
     private let debugAccount: DebugAccount?
@@ -64,7 +65,11 @@ struct ContentView: View {
             .task(id: "signal-\(scenePhase)-\(store.isConnected)") { await syncSignals() }
             .task(id: "profile-\(scenePhase)-\(store.isConnected)") { await syncProfiles() }
             .onChange(of: selectedTab) { _, tab in
-                if tab != .home { selectedGlobeMarkerID = nil }
+                if tab != .home {
+                    selectedGlobeMarker = nil
+                    signalToastDismissTask?.cancel()
+                    signalToast = nil
+                }
             }
             .sheet(item: $route.presented) { destination in
                 sheet(for: destination)
@@ -165,49 +170,33 @@ struct ContentView: View {
                     GlobeMapView(
                         myMarker: myGlobeMarker,
                         partnerMarker: partnerGlobeMarker,
-                        selectedMarkerID: $selectedGlobeMarkerID
+                        selection: $selectedGlobeMarker
                     )
 
-                    if selectedGlobeMarkerID == nil,
-                       let partnerSignal = store.latestSignal(.incoming, at: now) {
-                        PartnerSignalPill(
-                            event: partnerSignal,
+                    if let signalToast {
+                        PartnerSignalToast(
+                            event: signalToast,
                             partnerName: store.partnerProfile?.displayName ?? "상대",
-                            now: now,
-                            pulse: signalPulse
+                            now: now
                         )
                         .padding(.top, Metric.m)
                         .frame(maxHeight: .infinity, alignment: .top)
                         .transition(.move(edge: .top).combined(with: .opacity))
                     }
 
-                    VStack(spacing: Metric.s) {
-                        if let details = selectedGlobeDetails {
-                            GlobeProfileDetailCard(details: details, now: now)
-                                .id(details.id)
-                                .transition(
-                                    .move(edge: .bottom)
-                                        .combined(with: .opacity)
-                                        .combined(with: .scale(scale: 0.96, anchor: .bottom))
-                                )
-                        }
-
-                        Actions(
-                            focus: focus,
-                            heartPulse: heartSequence,
-                            currentSignal: store.latestSignal(.outgoing, at: now)?.signal,
-                            onHeart: queueHeart,
-                            onPrimary: primaryAction,
-                            onSignal: { route = .signal }
-                        )
-                    }
+                    Actions(
+                        focus: focus,
+                        heartPulse: heartSequence,
+                        currentSignal: store.latestSignal(.outgoing, at: now)?.signal,
+                        onHeart: queueHeart,
+                        onPrimary: primaryAction,
+                        onSignal: { route = .signal }
+                    )
                     .padding(.horizontal, Metric.screenPadding)
                     .padding(.bottom, Metric.s)
                     .frame(maxHeight: .infinity, alignment: .bottom)
                 }
                 .clipped()
-                .animation(.spring(response: 0.42, dampingFraction: 0.82), value: store.latestSignal(.incoming, at: now)?.id)
-                .animation(.spring(response: 0.38, dampingFraction: 0.82), value: selectedGlobeMarkerID)
             }
             .overlay(alignment: .bottom) {
                 Color.black.frame(height: 1)
@@ -223,7 +212,8 @@ struct ContentView: View {
             id: .mine,
             displayName: store.myProfile?.displayName ?? "나",
             city: store.homeCity,
-            avatarData: store.myProfile.flatMap { store.avatarData(for: $0) }
+            avatarData: store.myProfile.flatMap { store.avatarData(for: $0) },
+            signal: store.latestSignal(.outgoing, at: now)?.signal
         )
     }
 
@@ -232,20 +222,8 @@ struct ContentView: View {
             id: .partner,
             displayName: store.partnerProfile?.displayName ?? "상대",
             city: store.partnerCity,
-            avatarData: store.partnerProfile.flatMap { store.avatarData(for: $0) }
-        )
-    }
-
-    private var selectedGlobeDetails: GlobeProfileDetails? {
-        guard let selectedGlobeMarkerID else { return nil }
-        let marker = selectedGlobeMarkerID == .mine ? myGlobeMarker : partnerGlobeMarker
-        let direction: ParcelDirection = selectedGlobeMarkerID == .mine ? .outgoing : .incoming
-        return GlobeProfileDetails(
-            id: selectedGlobeMarkerID,
-            displayName: marker.displayName,
-            city: marker.city,
-            avatarData: marker.avatarData,
-            signal: store.latestSignal(direction, at: now)
+            avatarData: store.partnerProfile.flatMap { store.avatarData(for: $0) },
+            signal: store.latestSignal(.incoming, at: now)?.signal
         )
     }
 
@@ -357,11 +335,25 @@ struct ContentView: View {
 
         while !Task.isCancelled {
             let received = await store.refreshSignals()
-            if !received.isEmpty {
-                signalPulse += 1
+            if let newest = received.max(by: { $0.sentAt < $1.sentAt }) {
+                showSignalToast(newest)
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             }
             try? await Task.sleep(for: .seconds(4))
+        }
+    }
+
+    private func showSignalToast(_ event: SignalEvent) {
+        signalToastDismissTask?.cancel()
+        withAnimation(.spring(response: 0.36, dampingFraction: 0.78)) {
+            signalToast = event
+        }
+        signalToastDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled, signalToast?.id == event.id else { return }
+            withAnimation(.easeOut(duration: 0.22)) {
+                signalToast = nil
+            }
         }
     }
 
@@ -410,76 +402,6 @@ struct ContentView: View {
             let busy = !store.inFlight(at: moment).isEmpty
             try? await Task.sleep(for: .seconds(busy ? 1 : 10))
         }
-    }
-}
-
-// MARK: - Globe profile details
-
-private struct GlobeProfileDetails: Identifiable, Equatable {
-    let id: GlobeProfileMarker.ID
-    let displayName: String
-    let city: CoupleCity
-    let avatarData: Data?
-    let signal: SignalEvent?
-}
-
-private struct GlobeProfileDetailCard: View {
-    let details: GlobeProfileDetails
-    let now: Date
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Metric.m) {
-            HStack(spacing: Metric.m) {
-                ProfileAvatarImage(
-                    data: details.avatarData,
-                    displayName: details.displayName,
-                    size: 40
-                )
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(details.displayName)
-                        .font(.rounded(.subheadline, .semibold))
-                        .foregroundStyle(Palette.textPrimary)
-
-                    Text("\(details.city.name) · \(details.city.country) · \(now.hourMinute(in: details.city.timeZone))")
-                        .font(.rounded(.caption))
-                        .foregroundStyle(Palette.textSecondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 0)
-            }
-
-            HStack(spacing: Metric.s) {
-                if let signal = details.signal {
-                    Label(signal.signal.title, systemImage: signal.signal.symbol)
-                    Text(signal.sentAt.koreanRelative(to: now))
-                        .foregroundStyle(Palette.textTertiary)
-                } else {
-                    Label("상태 없음", systemImage: "minus.circle")
-                }
-            }
-            .font(.rounded(.caption, .medium))
-            .foregroundStyle(Palette.textSecondary)
-        }
-        .padding(.horizontal, Metric.l)
-        .padding(.vertical, Metric.m)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(Palette.hairline, lineWidth: 0.5)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel)
-    }
-
-    private var accessibilityLabel: String {
-        let location = "\(details.city.name), \(details.city.country), 현지 시간 \(now.hourMinute(in: details.city.timeZone))"
-        guard let signal = details.signal else {
-            return "\(details.displayName), \(location), 현재 Signal 없음"
-        }
-        return "\(details.displayName), \(location), \(signal.signal.title), \(signal.sentAt.koreanRelative(to: now))"
     }
 }
 
@@ -543,33 +465,28 @@ private struct ClockRow: View {
 
 // MARK: - Signal status
 
-private struct PartnerSignalPill: View {
+private struct PartnerSignalToast: View {
     let event: SignalEvent
     let partnerName: String
     let now: Date
-    let pulse: Int
 
     var body: some View {
-        HStack(spacing: Metric.m) {
-            Image(systemName: event.signal.symbol)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Palette.textPrimary)
-                .symbolEffect(.bounce, value: pulse)
+        HStack(spacing: Metric.s) {
+            Text(event.signal.emoji)
+                .font(.title3)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(event.signal.partnerCaption)
-                    .font(.rounded(.footnote, .semibold))
-                    .foregroundStyle(Palette.textPrimary)
-                Text("\(partnerName) · \(event.sentAt.koreanRelative(to: now))")
-                    .font(.rounded(.caption2))
-                    .foregroundStyle(Palette.textSecondary)
-            }
+            Text("\(partnerName) · \(event.sentAt.koreanRelative(to: now))")
+                .font(.rounded(.footnote, .semibold))
+                .foregroundStyle(Palette.textPrimary)
         }
-        .padding(.horizontal, Metric.l)
-        .frame(height: 52)
+        .padding(.horizontal, Metric.m)
+        .frame(height: 38)
         .glassEffect(.regular, in: Capsule())
         .overlay { Capsule().strokeBorder(Palette.hairline, lineWidth: 0.5) }
         .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(partnerName), \(event.signal.title), \(event.sentAt.koreanRelative(to: now))"
+        )
     }
 }
 
@@ -611,11 +528,9 @@ private struct Actions: View {
             .accessibilityHint("연속으로 누르면 누른 횟수만큼 상대에게 전달됩니다")
 
             Button(action: onSignal) {
-                Image(systemName: currentSignal?.symbol ?? "antenna.radiowaves.left.and.right")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Palette.textPrimary)
+                Text(currentSignal?.emoji ?? "📡")
+                    .font(.system(size: 21))
                     .frame(width: 52, height: 44)
-                    .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.capsule)

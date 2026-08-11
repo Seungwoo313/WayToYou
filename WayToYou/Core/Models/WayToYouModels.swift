@@ -72,13 +72,13 @@ enum CoupleSignal: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    var symbol: String {
+    var emoji: String {
         switch self {
-        case .sleeping: "moon.zzz.fill"
-        case .focusing: "laptopcomputer"
-        case .free: "cup.and.saucer.fill"
-        case .out: "figure.walk"
-        case .resting: "house.fill"
+        case .sleeping: "😴"
+        case .focusing: "💻"
+        case .free: "☕️"
+        case .out: "🚶"
+        case .resting: "🏠"
         }
     }
 }

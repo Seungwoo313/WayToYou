@@ -45,9 +45,8 @@ private struct SignalButton: View {
     var body: some View {
         Button(action: action) {
             VStack(spacing: Metric.s) {
-                Image(systemName: signal.symbol)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color.black : Palette.textPrimary)
+                Text(signal.emoji)
+                    .font(.system(size: 25))
                     .frame(width: 52, height: 52)
                     .background(isSelected ? Color.white : Color.white.opacity(0.08), in: Circle())
                     .overlay {
