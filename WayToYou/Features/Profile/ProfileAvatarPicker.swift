@@ -1,4 +1,5 @@
 import AVFoundation
+import ImageIO
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -17,6 +18,7 @@ struct ProfileAvatarPicker: View {
     @State private var isShowingLibrary = false
     @State private var isShowingCamera = false
     @State private var selectedItem: PhotosPickerItem?
+    @State private var cropRequest: AvatarCropRequest?
     @State private var isLoadingSource = false
 
     var body: some View {
@@ -75,11 +77,21 @@ struct ProfileAvatarPicker: View {
             ProfileCameraPicker(
                 onCapture: { image in
                     isShowingCamera = false
-                    Task { await processCameraImage(image.preparedForAvatarUpload) }
+                    presentCropAfterCameraDismisses(image.preparedForAvatarCrop)
                 },
                 onCancel: { isShowingCamera = false }
             )
             .ignoresSafeArea()
+        }
+        .fullScreenCover(item: $cropRequest) { request in
+            ProfileAvatarCropView(
+                image: request.image,
+                title: request.title
+            ) { result in
+                cropRequest = nil
+                guard let result else { return }
+                onImageReady(result)
+            }
         }
     }
 
@@ -96,35 +108,57 @@ struct ProfileAvatarPicker: View {
             guard let sourceData = try await item.loadTransferable(type: Data.self) else {
                 throw ProfileAvatarProcessingError.invalidImage
             }
-            let processed = try await Task.detached(priority: .userInitiated) {
-                try ProfileAvatarProcessor.jpegData(from: sourceData)
+            let image = try await Task.detached(priority: .userInitiated) {
+                guard let image = AvatarCropImageLoader.image(from: sourceData) else {
+                    throw ProfileAvatarProcessingError.invalidImage
+                }
+                return image
             }.value
-            onImageReady(processed)
+            try? await Task.sleep(for: .milliseconds(180))
+            cropRequest = AvatarCropRequest(
+                image: image,
+                title: hasAvatar ? "프로필 사진 변경" : "프로필 사진 추가"
+            )
         } catch {
             onError("사진을 불러오지 못했어요. 다른 사진을 선택해주세요.")
         }
     }
 
-    private func processCameraImage(_ image: UIImage) async {
-        isLoadingSource = true
-        defer { isLoadingSource = false }
-
-        do {
-            guard let sourceData = image.jpegData(compressionQuality: 0.9) else {
-                throw ProfileAvatarProcessingError.encodingFailed
-            }
-            let processed = try await Task.detached(priority: .userInitiated) {
-                try ProfileAvatarProcessor.jpegData(from: sourceData)
-            }.value
-            onImageReady(processed)
-        } catch {
-            onError("사진을 처리하지 못했어요. 다시 촬영해주세요.")
+    private func presentCropAfterCameraDismisses(_ image: UIImage) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            cropRequest = AvatarCropRequest(
+                image: image,
+                title: hasAvatar ? "프로필 사진 변경" : "프로필 사진 추가"
+            )
         }
     }
 }
 
+private struct AvatarCropRequest: Identifiable {
+    let id = UUID()
+    let image: UIImage
+    let title: String
+}
+
+private enum AvatarCropImageLoader {
+    nonisolated static func image(from data: Data) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: 2_048
+        ]
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        return UIImage(cgImage: thumbnail, scale: 1, orientation: .up)
+    }
+}
+
 private extension UIImage {
-    var preparedForAvatarUpload: UIImage {
+    var preparedForAvatarCrop: UIImage {
         let maximumDimension: CGFloat = 2_048
         let largestSide = max(size.width, size.height)
         guard imageOrientation != .up || largestSide > maximumDimension else { return self }
