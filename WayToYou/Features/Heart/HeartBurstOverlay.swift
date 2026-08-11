@@ -16,7 +16,7 @@ struct HeartParticle: Identifiable, Equatable {
         let index = sequence % offsets.count
 
         return HeartParticle(
-            originX: incoming ? 0.82 : 0.17,
+            originX: incoming ? 0.58 : 0.42,
             horizontalOffset: offsets[index],
             drift: drifts[index],
             rise: 210 + CGFloat((sequence * 17) % 90),
@@ -54,7 +54,7 @@ private struct FloatingHeart: View {
     var body: some View {
         Image(systemName: "heart.fill")
             .font(.system(size: particle.size, weight: .semibold))
-            .foregroundStyle(Color.white)
+            .foregroundStyle(Color.pink)
             .shadow(color: .black.opacity(0.35), radius: 5, y: 2)
             .scaleEffect(isFlying ? 1.18 : 0.72)
             .rotationEffect(.degrees(isFlying ? particle.rotation : 0))

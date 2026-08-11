@@ -123,17 +123,13 @@ struct ContentView: View {
                         partnerCity: store.partnerCity
                     )
 
-                    VStack(spacing: Metric.m) {
-                        HeartStatus(store: store, now: now)
-
-                        Actions(
-                            focus: focus,
-                            heartPulse: heartSequence,
-                            onHeart: queueHeart,
-                            onPrimary: primaryAction,
-                            onSignal: { route = .signal }
-                        )
-                    }
+                    Actions(
+                        focus: focus,
+                        heartPulse: heartSequence,
+                        onHeart: queueHeart,
+                        onPrimary: primaryAction,
+                        onSignal: { route = .signal }
+                    )
                     .padding(.horizontal, Metric.screenPadding)
                     .padding(.bottom, Metric.s)
                 }
@@ -445,51 +441,9 @@ private struct ProgressHairline: View {
     }
 }
 
-private struct HeartStatus: View {
-    let store: WayToYouStore
-    let now: Date
-
-    private var burst: HeartBurst? {
-        store.latestHeartBurst(.incoming, at: now)
-            ?? store.latestHeartBurst(.outgoing, at: now)
-    }
-
-    var body: some View {
-        if let burst {
-            HStack(spacing: Metric.s) {
-                Image(systemName: "heart.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                Text(title(for: burst))
-                    .font(.rounded(.caption, .semibold))
-                    .lineLimit(1)
-                Text("· \(burst.sentAt.koreanRelative(to: now))")
-                    .font(.rounded(.caption))
-                    .foregroundStyle(Palette.textTertiary)
-                    .lineLimit(1)
-            }
-            .foregroundStyle(Palette.textPrimary)
-            .padding(.horizontal, Metric.l)
-            .frame(height: 38)
-            .background(Color.black.opacity(0.62), in: Capsule())
-            .overlay { Capsule().strokeBorder(Palette.hairline, lineWidth: 0.5) }
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-            .accessibilityElement(children: .combine)
-        }
-    }
-
-    private func title(for burst: HeartBurst) -> String {
-        if burst.direction == .incoming {
-            return burst.count == 1
-                ? "\(store.partnerProfile?.displayName ?? "상대")에게서 Heart가 왔어요"
-                : "\(store.partnerProfile?.displayName ?? "상대")에게서 Heart \(burst.count)개"
-        }
-        return burst.count == 1 ? "Heart를 보냈어요" : "Heart \(burst.count)개를 보냈어요"
-    }
-}
-
 // MARK: - Actions
 
-/// 홈의 유일한 두 행동. 기록과 설정은 시스템 탭 바로 이동했다.
+/// 감정의 무게가 작은 순서대로 둔, 홈의 세 가지 아이콘 액션.
 private struct Actions: View {
     let focus: HomeFocus
     let heartPulse: Int
@@ -502,8 +456,6 @@ private struct Actions: View {
         return false
     }
 
-    private var primaryTitle: String { isArrived ? "열어보기" : "소포" }
-
     /// 평상시엔 흰색. 소포가 도착했을 때만 포장지 색으로 바뀐다.
     /// 늘 색이 차 있으면 도착이 특별해 보이지 않는다.
     private var arrivedWrap: ParcelWrap? {
@@ -512,40 +464,39 @@ private struct Actions: View {
     }
 
     var body: some View {
-        HStack(spacing: Metric.m) {
+        HStack(spacing: Metric.s) {
             Button(action: onHeart) {
-                HStack(spacing: 7) {
-                    Image(systemName: "heart.fill")
-                        .symbolEffect(.bounce, value: heartPulse)
-                    Text("Heart")
-                }
-                .foregroundStyle(Color.black)
-                .font(.rounded(.subheadline, .semibold))
-                .frame(maxWidth: .infinity)
-                .frame(height: 54)
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.pink)
+                    .symbolEffect(.bounce, value: heartPulse)
+                    .frame(width: 52, height: 44)
             }
-            .buttonStyle(.glassProminent)
-            .tint(.white)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
+            .accessibilityLabel("Heart 보내기")
+            .accessibilityHint("연속으로 누르면 누른 횟수만큼 상대에게 전달됩니다")
 
             Button(action: onSignal) {
-                Label("시그널", systemImage: "antenna.radiowaves.left.and.right")
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Palette.textPrimary)
-                    .font(.rounded(.subheadline, .semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 54)
+                    .frame(width: 52, height: 44)
             }
             .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
+            .accessibilityLabel("시그널 보내기")
 
             Button(action: onPrimary) {
-                Label(primaryTitle, systemImage: isArrived ? "shippingbox.fill" : "shippingbox")
+                Image(systemName: isArrived ? "shippingbox.fill" : "shippingbox")
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(arrivedWrap?.color ?? Palette.textPrimary)
-                    .font(.rounded(.subheadline, .semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 54)
+                    .frame(width: 52, height: 44)
             }
             .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
+            .accessibilityLabel(isArrived ? "도착한 소포 열기" : "소포 보내기")
         }
-        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     }
 }
 
