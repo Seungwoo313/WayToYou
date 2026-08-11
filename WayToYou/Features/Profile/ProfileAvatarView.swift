@@ -15,7 +15,7 @@ struct ProfileAvatarImage: View {
             } else {
                 ZStack {
                     Color(white: 0.12)
-                    Text(initial)
+                    Text(Self.fallbackInitial(for: displayName))
                         .font(.system(size: size * 0.34, weight: .semibold, design: .rounded))
                         .foregroundStyle(Palette.textPrimary)
                 }
@@ -30,7 +30,7 @@ struct ProfileAvatarImage: View {
         .accessibilityLabel(data == nil ? "\(displayName) 기본 프로필" : "\(displayName) 프로필 사진")
     }
 
-    private var initial: String {
+    static func fallbackInitial(for displayName: String) -> String {
         let cleaned = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned.first.map { String($0).uppercased() } ?? "?"
     }

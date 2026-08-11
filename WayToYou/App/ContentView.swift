@@ -159,8 +159,18 @@ struct ContentView: View {
 
                 ZStack {
                     GlobeMapView(
-                        homeCity: store.homeCity,
-                        partnerCity: store.partnerCity
+                        myMarker: GlobeProfileMarker(
+                            id: .mine,
+                            displayName: store.myProfile?.displayName ?? "나",
+                            city: store.homeCity,
+                            avatarData: store.myProfile.flatMap { store.avatarData(for: $0) }
+                        ),
+                        partnerMarker: GlobeProfileMarker(
+                            id: .partner,
+                            displayName: store.partnerProfile?.displayName ?? "상대",
+                            city: store.partnerCity,
+                            avatarData: store.partnerProfile.flatMap { store.avatarData(for: $0) }
+                        )
                     )
 
                     if let partnerSignal = store.latestSignal(.incoming, at: now) {
