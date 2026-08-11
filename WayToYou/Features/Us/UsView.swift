@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 struct UsView: View {
     @Bindable var store: WayToYouStore
@@ -9,6 +8,7 @@ struct UsView: View {
     @State private var confirmingReset = false
     @State private var isProcessingAvatar = false
     @State private var avatarSelectionMessage: String?
+    @State private var avatarToastID: UUID?
 
     init(store: WayToYouStore, presentedAsSheet: Bool = true) {
         self.store = store
@@ -71,6 +71,20 @@ struct UsView: View {
                     }
                     .padding(Metric.screenPadding)
                 }
+
+                if let avatarToastID {
+                    ProfileAvatarSuccessToast(message: "프로필 사진이 변경되었어요!")
+                        .id(avatarToastID)
+                        .padding(.horizontal, Metric.screenPadding)
+                        .padding(.top, Metric.s)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .transition(
+                            .move(edge: .top)
+                                .combined(with: .opacity)
+                                .combined(with: .scale(scale: 0.96, anchor: .top))
+                        )
+                        .zIndex(10)
+                }
             }
             .navigationTitle("우리")
             .navigationBarTitleDisplayMode(.inline)
@@ -87,6 +101,20 @@ struct UsView: View {
                 Button("취소", role: .cancel) {}
             } message: {
                 Text("현재 기기에 저장된 데모 소포와 시그널이 삭제돼요.")
+            }
+            .task(id: avatarToastID) {
+                guard let toastID = avatarToastID else { return }
+
+                do {
+                    try await Task.sleep(for: .seconds(2.1))
+                } catch {
+                    return
+                }
+
+                guard avatarToastID == toastID else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    avatarToastID = nil
+                }
             }
         }
         .presentationBackground(Palette.space)
@@ -135,7 +163,7 @@ struct UsView: View {
                             avatarSelectionMessage = nil
                             Task {
                                 if await store.clearProfileAvatar() {
-                                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                                    showAvatarSuccessToast()
                                 }
                             }
                         },
@@ -187,7 +215,13 @@ struct UsView: View {
         defer { isProcessingAvatar = false }
 
         if await store.uploadProfileAvatar(data) {
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            showAvatarSuccessToast()
+        }
+    }
+
+    private func showAvatarSuccessToast() {
+        withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
+            avatarToastID = UUID()
         }
     }
 
