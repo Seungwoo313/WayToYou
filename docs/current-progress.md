@@ -2,7 +2,7 @@
 
 작성일: 2026-08-11
 브랜치: `codex/product-plan-mvp`
-최신 커밋: `67c9644 style: simplify Heart action controls`
+최신 커밋: `20d9c17 feat: add secure profile photo storage`
 
 ## 현재 방향
 
@@ -68,6 +68,28 @@
 - `2090df8 fix: reject stale Keychain auth sessions`
 - `67c9644 style: simplify Heart action controls`
 
+### Signal
+
+- 연결된 상대에게 보이는 현재 상태 Signal 흐름을 추가했다.
+- Signal 보내기·목록 조회를 Supabase security-definer RPC 경계로 연결했다.
+- Signal 타입과 만료/최근 상태 모델을 정리했다.
+- 관련 DB 마이그레이션을 추가했다.
+
+관련 커밋:
+
+- `17d996c feat: add connected Signal states`
+
+### 프로필 사진 보안 저장소
+
+- 비공개 Supabase Storage bucket 마이그레이션을 추가했다.
+- 사진은 소유자와 현재 연결된 상대만 읽을 수 있도록 Storage 정책을 정의했다.
+- 프로필에 `avatar_path`, `avatar_updated_at` 필드를 추가하는 SQL을 준비했다.
+- 아직 앱의 사진 선택·업로드 UI는 구현하지 않았다.
+
+관련 커밋:
+
+- `20d9c17 feat: add secure profile photo storage`
+
 ## Supabase 상태
 
 - Supabase Swift SDK와 앱 API 연결은 기존 설정으로 구성되어 있다.
@@ -81,6 +103,8 @@
 - `supabase/config.toml`
 - `supabase/migrations/20260810194000_secure_partner_connections.sql`
 - `supabase/migrations/20260811171000_mapkit_route_endpoints.sql`
+- `supabase/migrations/20260811190000_signals.sql`
+- `supabase/migrations/20260811193000_profile_photos.sql`
 - `WayToYou/Services/SupabaseConnectionService.swift`
 
 ### 아직 하지 않은 것
@@ -88,6 +112,7 @@
 - `supabase db push`는 아직 실행하지 않았다.
 - 원격 DB의 실제 마이그레이션 적용 상태는 아직 확인하지 않았다.
 - 따라서 원격 DB에 `route_endpoint` 컬럼과 `wty_save_profile(text, jsonb)` 함수가 존재한다고 가정하면 안 된다.
+- Signal 테이블/RPC와 프로필 사진 Storage 정책도 원격 DB에 적용됐다고 가정하면 안 된다.
 - 프로필 저장의 서버 연동을 확인하려면 먼저 `migration list`와 `db push --dry-run`을 실행해야 한다.
 
 다음 확인 순서:
@@ -105,7 +130,7 @@ supabase db push
 1. 다른 작업공간에서 Supabase 마이그레이션 상태 확인 및 필요 시 적용
 2. 원격 DB 적용 후 프로필 저장·복원 end-to-end 검증
 3. 최신 Heart 흐름을 `승우의 iPhone`에서 재검증
-4. Signal의 서버 송수신 및 만료 상태 연결
+4. 프로필 사진 선택·업로드·비공개 다운로드 클라이언트 구현
 5. Letter·Parcel·Delivery·Archive 흐름 구현
 6. Widget 및 후속 Product Plan 기능 구현
 
@@ -114,4 +139,6 @@ supabase db push
 - 작업 중인 앱: `com.seungwoo.WayToYou`
 - 실기기: `승우의 iPhone`
 - 변경 후 iOS 작업은 실기기 실행까지 확인한다.
+- MapKit 온보딩과 무채색 UI 버전은 실기기에서 확인했다.
+- 최신 Signal Swift 변경분은 다음 실기기 빌드에서 재검증해야 한다.
 - 앱 인증 토큰은 iOS Keychain을 사용하며, Keychain은 Supabase DB가 아니라 기기 내부의 보호된 인증 저장소다.
