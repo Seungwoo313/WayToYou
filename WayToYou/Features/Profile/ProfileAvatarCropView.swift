@@ -12,47 +12,68 @@ struct ProfileAvatarCropView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let cropSide = proxy.size.width
+            let topInset = proxy.safeAreaInsets.top
+            let bottomInset = proxy.safeAreaInsets.bottom
+            let headerHeight: CGFloat = 82
+            let availableHeight = proxy.size.height
+                - topInset
+                - bottomInset
+                - headerHeight
+                - 32
+            let cropSide = max(min(proxy.size.width, availableHeight), 160)
 
-            VStack(spacing: 0) {
-                header
+            ZStack {
+                Color.black.ignoresSafeArea()
 
-                ZStack {
-                    ProfileAvatarZoomCanvas(image: image, controller: controller)
+                Color.white
+                    .frame(height: topInset + headerHeight)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .ignoresSafeArea(edges: .top)
 
-                    AvatarCropMask()
-                        .fill(Color.black.opacity(0.48), style: FillStyle(eoFill: true))
-                        .allowsHitTesting(false)
+                VStack(spacing: 0) {
+                    header
+                        .frame(height: headerHeight)
 
-                    Circle()
-                        .strokeBorder(Color.white.opacity(0.82), lineWidth: 1.5)
-                        .allowsHitTesting(false)
+                    Spacer(minLength: 16)
+
+                    cropCanvas(size: cropSide)
+
+                    Spacer(minLength: 16)
                 }
-                .frame(width: cropSide, height: cropSide)
-                .clipped()
+                .padding(.top, topInset)
+                .padding(.bottom, bottomInset)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                VStack(spacing: 9) {
-                    Image(systemName: "hand.pinch")
-                        .font(.system(size: 18, weight: .medium))
-                    Text("사진을 움직이고 두 손가락으로 확대하세요")
-                        .font(.rounded(.subheadline, .medium))
-
-                    if let saveMessage {
-                        Text(saveMessage)
-                            .font(.rounded(.caption, .medium))
-                            .foregroundStyle(.black)
-                            .padding(.top, 3)
-                    }
+                if let saveMessage {
+                    Text(saveMessage)
+                        .font(.rounded(.caption, .medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .frame(height: 40)
+                        .background(Color.white.opacity(0.14), in: Capsule())
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, bottomInset + 20)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
                 }
-                .foregroundStyle(Color.black.opacity(0.58))
-                .padding(.top, 24)
-
-                Spacer(minLength: 16)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Color.white.ignoresSafeArea())
         .preferredColorScheme(.light)
+    }
+
+    private func cropCanvas(size: CGFloat) -> some View {
+        ZStack {
+            ProfileAvatarZoomCanvas(image: image, controller: controller)
+
+            AvatarCropMask()
+                .fill(Color.black.opacity(0.48), style: FillStyle(eoFill: true))
+                .allowsHitTesting(false)
+
+            Circle()
+                .strokeBorder(Color.white.opacity(0.82), lineWidth: 1.5)
+                .allowsHitTesting(false)
+        }
+        .frame(width: size, height: size)
+        .clipped()
     }
 
     private var header: some View {
@@ -60,6 +81,9 @@ struct ProfileAvatarCropView: View {
             Text(title)
                 .font(.system(size: 20, weight: .bold, design: .rounded))
                 .foregroundStyle(.black)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.horizontal, 88)
 
             HStack {
                 circleButton(
@@ -86,7 +110,6 @@ struct ProfileAvatarCropView: View {
             }
             .padding(.horizontal, 18)
         }
-        .frame(height: 92)
         .background(Color.white)
     }
 
