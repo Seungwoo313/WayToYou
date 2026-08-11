@@ -11,6 +11,10 @@ struct ContentView: View {
     @State private var now = Date()
     @State private var route = SheetRoute.none
     @State private var selectedTab = AppTab.home
+    @State private var floatingHearts: [HeartParticle] = []
+    @State private var pendingHeartCount = 0
+    @State private var heartSequence = 0
+    @State private var heartSendTask: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
 
     private var focus: HomeFocus { store.focus(at: now) }
@@ -40,8 +44,14 @@ struct ContentView: View {
             await store.activateBackend(client: client, userID: userID)
         }
         .task(id: "\(scenePhase)-\(store.isConnected)") { await runClock() }
+        .task(id: "heart-\(scenePhase)-\(store.isConnected)") { await syncHeartBursts() }
         .sheet(item: $route.presented) { destination in
             sheet(for: destination)
+        }
+        .alert("Heart를 보내지 못했어요", isPresented: heartMessageBinding) {
+            Button("확인", role: .cancel) {}
+        } message: {
+            Text(store.heartMessage ?? "잠시 후 다시 시도해주세요.")
         }
         #if DEBUG
         // 스크린샷용. `simctl launch ... -previewSheet compose`처럼 띄운다.
@@ -113,11 +123,17 @@ struct ContentView: View {
                         partnerCity: store.partnerCity
                     )
 
-                    Actions(
-                        focus: focus,
-                        onPrimary: primaryAction,
-                        onSignal: { route = .signal }
-                    )
+                    VStack(spacing: Metric.m) {
+                        HeartStatus(store: store, now: now)
+
+                        Actions(
+                            focus: focus,
+                            heartPulse: heartSequence,
+                            onHeart: queueHeart,
+                            onPrimary: primaryAction,
+                            onSignal: { route = .signal }
+                        )
+                    }
                     .padding(.horizontal, Metric.screenPadding)
                     .padding(.bottom, Metric.s)
                 }
@@ -126,6 +142,8 @@ struct ContentView: View {
             .overlay(alignment: .bottom) {
                 Color.black.frame(height: 1)
             }
+
+            HeartBurstOverlay(particles: floatingHearts)
         }
         .background(Palette.spaceDeep.ignoresSafeArea())
     }
@@ -180,6 +198,73 @@ struct ContentView: View {
         } else {
             route = .compose
         }
+    }
+
+    private func queueHeart() {
+        guard store.isConnected else { return }
+
+        pendingHeartCount = min(pendingHeartCount + 1, 50)
+        emitHeart(incoming: false)
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.45)
+
+        heartSendTask?.cancel()
+        heartSendTask = Task {
+            if pendingHeartCount < 50 {
+                try? await Task.sleep(for: .milliseconds(700))
+            }
+            guard !Task.isCancelled else { return }
+            await flushPendingHearts()
+        }
+    }
+
+    private func flushPendingHearts() async {
+        // 다음 연타가 이미 전송 중인 Task를 취소하지 않도록 debounce 소유권을 먼저 놓는다.
+        heartSendTask = nil
+        let count = pendingHeartCount
+        guard count > 0 else { return }
+        pendingHeartCount = 0
+        _ = await store.sendHeartBurst(count: count)
+    }
+
+    private func syncHeartBursts() async {
+        guard scenePhase == .active, store.isConnected else { return }
+
+        while !Task.isCancelled {
+            let received = await store.refreshHeartBursts()
+            for burst in received {
+                await playIncoming(burst)
+            }
+            try? await Task.sleep(for: .seconds(4))
+        }
+    }
+
+    private func playIncoming(_ burst: HeartBurst) async {
+        for index in 0..<burst.count {
+            guard !Task.isCancelled else { return }
+            emitHeart(incoming: true)
+            if index.isMultiple(of: 4) {
+                UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.35)
+            }
+            try? await Task.sleep(for: .milliseconds(110))
+        }
+    }
+
+    private func emitHeart(incoming: Bool) {
+        heartSequence += 1
+        let particle = HeartParticle.make(sequence: heartSequence, incoming: incoming)
+        floatingHearts.append(particle)
+
+        Task {
+            try? await Task.sleep(for: .milliseconds(1_600))
+            floatingHearts.removeAll { $0.id == particle.id }
+        }
+    }
+
+    private var heartMessageBinding: Binding<Bool> {
+        Binding(
+            get: { store.heartMessage != nil },
+            set: { if !$0 { store.clearHeartMessage() } }
+        )
     }
 
     /// 하늘에 뜬 소포가 없으면 굳이 1초마다 깨울 이유가 없다.
@@ -360,11 +445,55 @@ private struct ProgressHairline: View {
     }
 }
 
+private struct HeartStatus: View {
+    let store: WayToYouStore
+    let now: Date
+
+    private var burst: HeartBurst? {
+        store.latestHeartBurst(.incoming, at: now)
+            ?? store.latestHeartBurst(.outgoing, at: now)
+    }
+
+    var body: some View {
+        if let burst {
+            HStack(spacing: Metric.s) {
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                Text(title(for: burst))
+                    .font(.rounded(.caption, .semibold))
+                    .lineLimit(1)
+                Text("· \(burst.sentAt.koreanRelative(to: now))")
+                    .font(.rounded(.caption))
+                    .foregroundStyle(Palette.textTertiary)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Palette.textPrimary)
+            .padding(.horizontal, Metric.l)
+            .frame(height: 38)
+            .background(Color.black.opacity(0.62), in: Capsule())
+            .overlay { Capsule().strokeBorder(Palette.hairline, lineWidth: 0.5) }
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func title(for burst: HeartBurst) -> String {
+        if burst.direction == .incoming {
+            return burst.count == 1
+                ? "\(store.partnerProfile?.displayName ?? "상대")에게서 Heart가 왔어요"
+                : "\(store.partnerProfile?.displayName ?? "상대")에게서 Heart \(burst.count)개"
+        }
+        return burst.count == 1 ? "Heart를 보냈어요" : "Heart \(burst.count)개를 보냈어요"
+    }
+}
+
 // MARK: - Actions
 
 /// 홈의 유일한 두 행동. 기록과 설정은 시스템 탭 바로 이동했다.
 private struct Actions: View {
     let focus: HomeFocus
+    let heartPulse: Int
+    let onHeart: () -> Void
     let onPrimary: () -> Void
     let onSignal: () -> Void
 
@@ -373,7 +502,7 @@ private struct Actions: View {
         return false
     }
 
-    private var primaryTitle: String { isArrived ? "소포 열어보기" : "소포 보내기" }
+    private var primaryTitle: String { isArrived ? "열어보기" : "소포" }
 
     /// 평상시엔 흰색. 소포가 도착했을 때만 포장지 색으로 바뀐다.
     /// 늘 색이 차 있으면 도착이 특별해 보이지 않는다.
@@ -384,19 +513,32 @@ private struct Actions: View {
 
     var body: some View {
         HStack(spacing: Metric.m) {
-            Button(action: onPrimary) {
-                Label(primaryTitle, systemImage: isArrived ? "shippingbox.fill" : "shippingbox")
-                    .foregroundStyle(arrivedWrap == nil ? Color.black : .white)
-                    .font(.rounded(.subheadline, .semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 54)
+            Button(action: onHeart) {
+                HStack(spacing: 7) {
+                    Image(systemName: "heart.fill")
+                        .symbolEffect(.bounce, value: heartPulse)
+                    Text("Heart")
+                }
+                .foregroundStyle(Color.black)
+                .font(.rounded(.subheadline, .semibold))
+                .frame(maxWidth: .infinity)
+                .frame(height: 54)
             }
             .buttonStyle(.glassProminent)
-            .tint(arrivedWrap?.color ?? .white)
+            .tint(.white)
 
             Button(action: onSignal) {
                 Label("시그널", systemImage: "antenna.radiowaves.left.and.right")
                     .foregroundStyle(Palette.textPrimary)
+                    .font(.rounded(.subheadline, .semibold))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 54)
+            }
+            .buttonStyle(.glass)
+
+            Button(action: onPrimary) {
+                Label(primaryTitle, systemImage: isArrived ? "shippingbox.fill" : "shippingbox")
+                    .foregroundStyle(arrivedWrap?.color ?? Palette.textPrimary)
                     .font(.rounded(.subheadline, .semibold))
                     .frame(maxWidth: .infinity)
                     .frame(height: 54)

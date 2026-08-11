@@ -62,6 +62,20 @@ private struct RemoteInvite: Decodable {
     }
 }
 
+struct RemoteHeartBurst: Decodable {
+    let id: UUID
+    let senderID: UUID
+    let count: Int
+    let sentAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case senderID = "sender_id"
+        case count = "heart_count"
+        case sentAt = "sent_at"
+    }
+}
+
 struct SupabaseConnectionService {
     private let client: SupabaseClient
 
@@ -113,6 +127,22 @@ struct SupabaseConnectionService {
         struct Parameters: Encodable { let p_invite_id: UUID }
         return try await client
             .rpc("wty_cancel_invite", params: Parameters(p_invite_id: id))
+            .execute()
+            .value
+    }
+
+    func sendHeartBurst(count: Int) async throws -> RemoteHeartBurst {
+        struct Parameters: Encodable { let p_count: Int }
+        return try await client
+            .rpc("wty_send_heart_burst", params: Parameters(p_count: count))
+            .execute()
+            .value
+    }
+
+    func listHeartBursts(limit: Int = 40) async throws -> [RemoteHeartBurst] {
+        struct Parameters: Encodable { let p_limit: Int }
+        return try await client
+            .rpc("wty_list_heart_bursts", params: Parameters(p_limit: limit))
             .execute()
             .value
     }

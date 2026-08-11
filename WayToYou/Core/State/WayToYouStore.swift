@@ -13,9 +13,11 @@ final class WayToYouStore {
     private(set) var partnerCityID: String
     private(set) var parcels: [Parcel]
     private(set) var signals: [SignalEvent]
+    private(set) var heartBursts: [HeartBurst]
     private(set) var backendIsReady = false
     private(set) var connectionIsWorking = false
     private(set) var connectionMessage: String?
+    private(set) var heartMessage: String?
 
     /// 서버가 없는 동안 상대 쪽 반응을 흉내 낸다.
     /// 배송 시간도 압축돼서 전체 루프를 몇 분 안에 볼 수 있다.
@@ -47,6 +49,7 @@ final class WayToYouStore {
     private let localConnectionService: any ConnectionServicing
     private var backendConnectionService: SupabaseConnectionService?
     private var activeUserID: UUID?
+    private var hasSyncedHearts = false
 
     private enum Key {
         static let myProfile = "wty.myProfile"
@@ -55,6 +58,7 @@ final class WayToYouStore {
         static let partner = "wty.partnerCityID"
         static let parcels = "wty.parcels"
         static let signals = "wty.signals"
+        static let heartBursts = "wty.heartBursts"
         static let demoMode = "wty.demoMode"
     }
 
@@ -88,6 +92,7 @@ final class WayToYouStore {
         demoMode = defaults.object(forKey: Key.demoMode) as? Bool ?? true
         parcels = Self.decode([Parcel].self, from: defaults.data(forKey: Key.parcels)) ?? []
         signals = Self.decode([SignalEvent].self, from: defaults.data(forKey: Key.signals)) ?? []
+        heartBursts = Self.decode([HeartBurst].self, from: defaults.data(forKey: Key.heartBursts)) ?? []
 
         if let myProfile {
             homeCityID = myProfile.cityID
@@ -125,6 +130,12 @@ final class WayToYouStore {
 
     func latestSignal(_ direction: ParcelDirection, at date: Date) -> SignalEvent? {
         signals
+            .filter { $0.direction == direction && $0.isFresh(at: date) }
+            .max { $0.sentAt < $1.sentAt }
+    }
+
+    func latestHeartBurst(_ direction: ParcelDirection, at date: Date) -> HeartBurst? {
+        heartBursts
             .filter { $0.direction == direction && $0.isFresh(at: date) }
             .max { $0.sentAt < $1.sentAt }
     }
@@ -337,9 +348,71 @@ final class WayToYouStore {
         save()
     }
 
+    @discardableResult
+    func sendHeartBurst(count: Int) async -> Bool {
+        guard isConnected, let backendConnectionService, let activeUserID else { return false }
+        let boundedCount = min(max(count, 1), 50)
+
+        heartMessage = nil
+
+        do {
+            let remote = try await backendConnectionService.sendHeartBurst(count: boundedCount)
+            let burst = HeartBurst(
+                id: remote.id,
+                direction: remote.senderID == activeUserID ? .outgoing : .incoming,
+                count: remote.count,
+                sentAt: remote.sentAt
+            )
+            if !heartBursts.contains(where: { $0.id == burst.id }) {
+                heartBursts.append(burst)
+                trimHeartBursts()
+                save()
+            }
+            return true
+        } catch {
+            heartMessage = Self.friendlyHeartError(error)
+            return false
+        }
+    }
+
+    /// 앱이 활성화된 동안 서버의 최근 Heart Burst를 가볍게 동기화한다.
+    /// 읽음 상태는 만들지 않고, 새로 도착했는지만 호출자에게 알려준다.
+    @discardableResult
+    func refreshHeartBursts() async -> [HeartBurst] {
+        guard isConnected, let backendConnectionService, let activeUserID else { return [] }
+
+        do {
+            let previousIDs = Set(heartBursts.map(\.id))
+            let remote = try await backendConnectionService.listHeartBursts()
+            let fetched = remote.map { burst in
+                HeartBurst(
+                    id: burst.id,
+                    direction: burst.senderID == activeUserID ? .outgoing : .incoming,
+                    count: burst.count,
+                    sentAt: burst.sentAt
+                )
+            }
+            let receivedBursts = hasSyncedHearts ? fetched.filter {
+                $0.direction == .incoming && !previousIDs.contains($0.id)
+            } : []
+            heartBursts = fetched
+            hasSyncedHearts = true
+            trimHeartBursts()
+            save()
+            return receivedBursts
+        } catch {
+            return []
+        }
+    }
+
+    func clearHeartMessage() {
+        heartMessage = nil
+    }
+
     func clearHistory() {
         parcels = []
         signals = []
+        heartBursts = []
         save()
     }
 
@@ -468,6 +541,13 @@ final class WayToYouStore {
         }
     }
 
+    private func trimHeartBursts() {
+        heartBursts.sort { $0.sentAt < $1.sentAt }
+        if heartBursts.count > 40 {
+            heartBursts.removeFirst(heartBursts.count - 40)
+        }
+    }
+
     private func save() {
         defaults.set(Self.encode(myProfile), forKey: storageKey(Key.myProfile))
         defaults.set(Self.encode(connectionStatus), forKey: storageKey(Key.connectionStatus))
@@ -475,6 +555,7 @@ final class WayToYouStore {
         defaults.set(partnerCityID, forKey: storageKey(Key.partner))
         defaults.set(Self.encode(parcels), forKey: storageKey(Key.parcels))
         defaults.set(Self.encode(signals), forKey: storageKey(Key.signals))
+        defaults.set(Self.encode(heartBursts), forKey: storageKey(Key.heartBursts))
     }
 
     private static func encode<T: Encodable>(_ value: T) -> Data? {
@@ -511,6 +592,11 @@ final class WayToYouStore {
         demoMode = defaults.object(forKey: storageKey(Key.demoMode)) as? Bool ?? true
         parcels = Self.decode([Parcel].self, from: defaults.data(forKey: storageKey(Key.parcels))) ?? []
         signals = Self.decode([SignalEvent].self, from: defaults.data(forKey: storageKey(Key.signals))) ?? []
+        heartBursts = Self.decode(
+            [HeartBurst].self,
+            from: defaults.data(forKey: storageKey(Key.heartBursts))
+        ) ?? []
+        hasSyncedHearts = false
 
         if let myProfile {
             homeCityID = myProfile.cityID
@@ -586,6 +672,14 @@ final class WayToYouStore {
         default:
             "서버 연결을 완료하지 못했어요. 잠시 후 다시 시도해주세요."
         }
+    }
+
+    private static func friendlyHeartError(_ error: Error) -> String {
+        if let postgrestError = error as? PostgrestError,
+           postgrestError.message == "connection_required" {
+            return "상대와 연결된 뒤 Heart를 보낼 수 있어요."
+        }
+        return "Heart를 보내지 못했어요. 잠시 후 다시 시도해주세요."
     }
 
     private static func partnerProfile(

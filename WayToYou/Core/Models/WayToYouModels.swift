@@ -123,6 +123,19 @@ enum ParcelDirection: String, Codable, Hashable {
     case incoming
 }
 
+// MARK: - Heart
+
+struct HeartBurst: Identifiable, Codable, Hashable {
+    let id: UUID
+    let direction: ParcelDirection
+    let count: Int
+    let sentAt: Date
+
+    func isFresh(at date: Date) -> Bool {
+        date.timeIntervalSince(sentAt) < 24 * 60 * 60
+    }
+}
+
 enum ParcelPhase: Hashable {
     case inTransit
     case arrived
