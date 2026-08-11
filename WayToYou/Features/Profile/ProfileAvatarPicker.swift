@@ -84,11 +84,18 @@ struct ProfileAvatarPicker: View {
             .ignoresSafeArea()
         }
         .fullScreenCover(item: $cropRequest) { request in
-            ProfileAvatarCropView(image: request.image) { result in
-                cropRequest = nil
-                guard let result else { return }
-                onImageReady(result)
-            }
+            ProfileAvatarCropView(
+                image: request.image,
+                onComplete: { result in
+                    cropRequest = nil
+                    guard let result else { return }
+                    onImageReady(result)
+                },
+                onChooseAnother: {
+                    cropRequest = nil
+                    presentSourceMenuAfterCropDismisses()
+                }
+            )
         }
     }
 
@@ -121,6 +128,13 @@ struct ProfileAvatarPicker: View {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(250))
             cropRequest = AvatarCropRequest(image: image)
+        }
+    }
+
+    private func presentSourceMenuAfterCropDismisses() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            isChoosingSource = true
         }
     }
 }

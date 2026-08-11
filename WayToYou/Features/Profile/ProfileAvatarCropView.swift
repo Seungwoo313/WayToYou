@@ -4,6 +4,7 @@ import UIKit
 struct ProfileAvatarCropView: View {
     let image: UIImage
     let onComplete: (Data?) -> Void
+    let onChooseAnother: () -> Void
 
     @State private var zoom: CGFloat = 1
     @State private var settledZoom: CGFloat = 1
@@ -13,91 +14,146 @@ struct ProfileAvatarCropView: View {
     @State private var saveMessage: String?
 
     var body: some View {
-        NavigationStack {
-            GeometryReader { proxy in
-                let cropSide = min(proxy.size.width - 32, proxy.size.height * 0.62)
-                let imageSize = image.size
-                let baseScale = max(cropSide / imageSize.width, cropSide / imageSize.height)
-                let renderedSize = CGSize(
-                    width: imageSize.width * baseScale * zoom,
-                    height: imageSize.height * baseScale * zoom
+        GeometryReader { proxy in
+            let cropSide = proxy.size.width
+            let imageSize = image.size
+            let baseScale = max(cropSide / imageSize.width, cropSide / imageSize.height)
+            let renderedSize = CGSize(
+                width: imageSize.width * baseScale * zoom,
+                height: imageSize.height * baseScale * zoom
+            )
+            let limitedOffset = constrained(offset, renderedSize: renderedSize, cropSide: cropSide)
+
+            VStack(spacing: 0) {
+                header(
+                    cropSide: cropSide,
+                    renderedSize: renderedSize,
+                    limitedOffset: limitedOffset
                 )
-                let limitedOffset = constrained(offset, renderedSize: renderedSize, cropSide: cropSide)
 
-                VStack(spacing: 24) {
-                    Spacer(minLength: 16)
+                ZStack {
+                    Image(uiImage: image)
+                        .resizable()
+                        .frame(width: renderedSize.width, height: renderedSize.height)
+                        .offset(limitedOffset)
 
-                    ZStack {
-                        Image(uiImage: image)
-                            .resizable()
-                            .frame(width: renderedSize.width, height: renderedSize.height)
-                            .offset(limitedOffset)
+                    AvatarCropMask()
+                        .fill(.black.opacity(0.48), style: FillStyle(eoFill: true))
 
-                        AvatarCropMask()
-                            .fill(.black.opacity(0.58), style: FillStyle(eoFill: true))
-
-                        Circle()
-                            .strokeBorder(.white.opacity(0.95), lineWidth: 2)
-                            .padding(1)
-                    }
-                    .frame(width: cropSide, height: cropSide)
-                    .clipped()
-                    .contentShape(Rectangle())
-                    .gesture(dragGesture(renderedSize: renderedSize, cropSide: cropSide))
-                    .simultaneousGesture(magnificationGesture(imageSize: imageSize, cropSide: cropSide))
-
-                    VStack(spacing: 7) {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                            .font(.system(size: 15, weight: .semibold))
-                        Text("사진을 움직이고 확대해 맞춰주세요")
-                            .font(.rounded(.subheadline, .medium))
-
-                        if let saveMessage {
-                            Text(saveMessage)
-                                .font(.rounded(.caption, .medium))
-                                .foregroundStyle(.white)
-                        }
-                    }
-                    .foregroundStyle(.white.opacity(0.72))
-
-                    Spacer(minLength: 20)
+                    Circle()
+                        .strokeBorder(.white.opacity(0.9), lineWidth: 1.5)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black.ignoresSafeArea())
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("취소") { onComplete(nil) }
-                            .foregroundStyle(.white)
-                    }
-                    ToolbarItem(placement: .principal) {
-                        Text("사진 맞추기")
-                            .font(.rounded(.headline, .semibold))
-                            .foregroundStyle(.white)
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button {
-                            save(
-                                cropSide: cropSide,
-                                renderedSize: renderedSize,
-                                limitedOffset: limitedOffset
-                            )
-                        } label: {
-                            if isSaving {
-                                ProgressView().tint(.white)
-                            } else {
-                                Text("사용")
-                            }
-                        }
-                        .font(.rounded(.body, .semibold))
-                        .foregroundStyle(.white)
-                        .disabled(isSaving)
-                    }
-                }
-                .toolbarBackground(.black, for: .navigationBar)
-                .toolbarBackground(.visible, for: .navigationBar)
+                .frame(width: cropSide, height: cropSide)
+                .clipped()
+                .contentShape(Rectangle())
+                .gesture(dragGesture(renderedSize: renderedSize, cropSide: cropSide))
+                .simultaneousGesture(magnificationGesture(imageSize: imageSize, cropSide: cropSide))
+
+                cropControls
+
+                Spacer(minLength: 12)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.white.ignoresSafeArea())
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
+    }
+
+    private func header(
+        cropSide: CGFloat,
+        renderedSize: CGSize,
+        limitedOffset: CGSize
+    ) -> some View {
+        ZStack {
+            Text("프로필 사진 편집")
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(.black)
+
+            HStack {
+                Button {
+                    onComplete(nil)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 23, weight: .medium))
+                        .foregroundStyle(.black)
+                        .frame(width: 56, height: 56)
+                        .background(Color(white: 0.94), in: Circle())
+                }
+                .accessibilityLabel("취소")
+
+                Spacer()
+
+                Button {
+                    save(
+                        cropSide: cropSide,
+                        renderedSize: renderedSize,
+                        limitedOffset: limitedOffset
+                    )
+                } label: {
+                    Group {
+                        if isSaving {
+                            ProgressView().tint(.white)
+                        } else {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 23, weight: .semibold))
+                        }
+                    }
+                    .foregroundStyle(.white)
+                    .frame(width: 56, height: 56)
+                    .background(Color.black, in: Circle())
+                }
+                .disabled(isSaving)
+                .accessibilityLabel("이 사진 사용")
+            }
+            .padding(.horizontal, 18)
+        }
+        .frame(height: 92)
+        .background(Color.white)
+    }
+
+    private var cropControls: some View {
+        VStack(spacing: 18) {
+            HStack(spacing: 14) {
+                Image(systemName: "minus.magnifyingglass")
+                Slider(
+                    value: Binding(
+                        get: { zoom },
+                        set: { value in
+                            zoom = value
+                            settledZoom = value
+                        }
+                    ),
+                    in: 1...5
+                )
+                    .tint(.black)
+                Image(systemName: "plus.magnifyingglass")
+            }
+            .font(.system(size: 16, weight: .medium))
+            .foregroundStyle(.black)
+
+            Text("사진을 움직이거나 두 손가락으로 확대하세요")
+                .font(.rounded(.subheadline, .medium))
+                .foregroundStyle(Color.black.opacity(0.58))
+
+            if let saveMessage {
+                Text(saveMessage)
+                    .font(.rounded(.caption, .medium))
+                    .foregroundStyle(.black)
+            }
+
+            Button(action: onChooseAnother) {
+                Label("다른 사진 고르기", systemImage: "photo.on.rectangle")
+                    .font(.rounded(.subheadline, .semibold))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 18)
+                    .frame(height: 44)
+                    .background(Color(white: 0.94), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(isSaving)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 22)
     }
 
     private func dragGesture(renderedSize: CGSize, cropSide: CGFloat) -> some Gesture {
