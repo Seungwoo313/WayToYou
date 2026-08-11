@@ -88,13 +88,13 @@ Way to You:
 
 Way to You의 핵심 경험은 세 단계로 나뉜다.
 
-**Ping → Signal → Gift**
+**Heart → Signal → Gift**
 
 표현하고 싶은 마음이 커질수록 인터랙션의 무게도 커진다.
 
 ---
 
-## 5.1 Ping — “그냥 네 생각났어”
+## 5.1 Heart — “그냥 네 생각났어”
 
 가장 가벼운 표현.
 
@@ -102,11 +102,11 @@ Way to You의 핵심 경험은 세 단계로 나뉜다.
 
 예:
 
-`♡ PING`
+`♥ HEART`
 
 상대방에게:
 
-`♡ PING FROM MINA`
+`♥ HEART FROM MINA`
 
 특징:
 
@@ -115,7 +115,7 @@ Way to You의 핵심 경험은 세 단계로 나뉜다.
 - 읽음 표시 없음
 - 대화창 없음
 - 짧은 햅틱과 최소한의 시각 효과
-- 원하면 상대도 Ping으로 되돌려줄 수 있음
+- 원하면 상대도 Heart로 되돌려줄 수 있음
 
 목표는 **“별말은 없지만 네 생각이 났다”**를 1초 안에 전달하는 것.
 
@@ -498,7 +498,7 @@ Box에는 당시의 노선 태그가 남는다.
 핵심은:
 
 1. 상대의 존재 보기
-2. Signal/Ping 보내기
+2. Heart/Signal 보내기
 3. Gift 보내기
 
 예:
@@ -647,8 +647,8 @@ Way to You는 관계를 관리하거나 평가하는 앱이 아니다.
 2. 각자의 도시 설정
 3. 상대 현지 시간
 4. 두 사람 사이 거리
-5. Signal
-6. Ping
+5. Heart
+6. Signal
 7. Interactive Widget
 8. Polaroid
 9. Voice Tape

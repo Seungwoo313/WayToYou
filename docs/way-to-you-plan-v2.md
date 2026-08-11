@@ -43,7 +43,7 @@ Way to You는 반대로 간다.
 
 짧은 실시간 텍스트 대화는 만들지 않는다.
 
-- 짧은 존재 표현 → `Ping`
+- 짧은 애정 표현 → `Heart`
 - 현재 상태 표현 → `Signal`
 - 긴 마음 → `Letter`
 - 목소리 → `Voice Tape`
@@ -181,9 +181,9 @@ Way to You는 실시간 위치 추적 앱이 아니다.
 
 Way to You의 표현 강도는 세 단계로 나뉜다.
 
-`Ping → Signal → Gift`
+`Heart → Signal → Gift`
 
-## 6.1 Ping
+## 6.1 Heart
 
 가장 가벼운 표현.
 
@@ -193,7 +193,7 @@ Way to You의 표현 강도는 세 단계로 나뉜다.
 
 UI:
 
-`♡ PING`
+`♥ HEART`
 
 한 번 누르면 상대에게 짧은 햅틱과 신호만 간다.
 
@@ -202,7 +202,7 @@ UI:
 - 읽음 표시 없음
 - 답장 의무 없음
 - 대화창 없음
-- 상대도 Ping으로 되돌려줄 수 있음
+- 상대도 Heart로 되돌려줄 수 있음
 
 ## 6.2 Signal
 
@@ -620,7 +620,7 @@ Way to You는 Social Network가 아니라:
 3. 도시 설정
 4. 공항 선택
 5. `Your Route`
-6. Ping
+6. Heart
 7. Signal
 8. Interactive Widget
 9. Polaroid
