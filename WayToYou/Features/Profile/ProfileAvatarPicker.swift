@@ -93,8 +93,8 @@ struct ProfileAvatarPicker: View {
                 onImageReady(result)
             }
             .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-            .presentationBackground(Color(uiColor: .secondarySystemBackground))
+            .presentationDragIndicator(.hidden)
+            .presentationBackground(Color.black)
         }
     }
 

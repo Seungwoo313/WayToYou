@@ -16,7 +16,7 @@ struct ProfileAvatarCropView: View {
                 let cropSide = max(min(proxy.size.width, proxy.size.height - 32), 160)
 
                 ZStack {
-                    Color(uiColor: .secondarySystemBackground).ignoresSafeArea()
+                    Color.black.ignoresSafeArea()
 
                     cropCanvas(size: cropSide)
 
