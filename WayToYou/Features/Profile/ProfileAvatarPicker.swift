@@ -83,7 +83,7 @@ struct ProfileAvatarPicker: View {
             )
             .ignoresSafeArea()
         }
-        .fullScreenCover(item: $cropRequest) { request in
+        .sheet(item: $cropRequest) { request in
             ProfileAvatarCropView(
                 image: request.image,
                 title: request.title
@@ -92,6 +92,9 @@ struct ProfileAvatarPicker: View {
                 guard let result else { return }
                 onImageReady(result)
             }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color(uiColor: .secondarySystemBackground))
         }
     }
 

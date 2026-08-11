@@ -16,7 +16,7 @@ struct ProfileAvatarCropView: View {
                 let cropSide = max(min(proxy.size.width, proxy.size.height - 32), 160)
 
                 ZStack {
-                    Color.black.ignoresSafeArea()
+                    Color(uiColor: .secondarySystemBackground).ignoresSafeArea()
 
                     cropCanvas(size: cropSide)
 
@@ -56,12 +56,12 @@ struct ProfileAvatarCropView: View {
                     .disabled(isSaving)
                 }
             }
-            .toolbarBackground(Color.white, for: .navigationBar)
+            .toolbarBackground(Color(uiColor: .secondarySystemBackground), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarColorScheme(.light, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
         }
-        .tint(.black)
-        .preferredColorScheme(.light)
+        .tint(.white)
+        .preferredColorScheme(.dark)
     }
 
     private func cropCanvas(size: CGFloat) -> some View {
