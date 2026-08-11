@@ -2,7 +2,7 @@
 
 작성일: 2026-08-11
 브랜치: `codex/product-plan-mvp`
-최신 커밋: `58bb2e5 feat: add animated avatar success toast`
+최신 커밋: `b83b277 feat: add simulator debug accounts`
 
 ## 현재 방향
 
@@ -84,7 +84,7 @@
 - 비공개 Supabase Storage bucket 마이그레이션을 추가했다.
 - 사진은 소유자와 현재 연결된 상대만 읽을 수 있도록 Storage 정책을 정의했다.
 - 프로필에 `avatar_path`, `avatar_updated_at` 필드를 추가하는 SQL을 준비했다.
-- 아직 앱의 사진 선택·업로드 UI는 구현하지 않았다.
+- 실제 업로드·다운로드 UI는 별도 클라이언트 흐름에서 구현했다.
 
 관련 커밋:
 
@@ -113,6 +113,23 @@
 - `57cb5d3 style: refine avatar crop sheet background`
 - `65f3166 style: use black avatar crop navigation`
 - `58bb2e5 feat: add animated avatar success toast`
+
+### 시뮬레이터 DEBUG 계정
+
+- Supabase 로그인과 온보딩 없이 연결된 화면으로 진입할 수 있는 시뮬레이터 전용 계정을 추가했다.
+- `mina`는 서울·인천공항, `sofia`는 Paris·CDG fixture를 사용한다.
+- 두 공항 값은 실제 앱 검색 데이터가 아니라 `#if DEBUG` 시뮬레이터 테스트 fixture다.
+- Heart, Signal, Parcel, 프로필 사진 변경을 역할별 로컬 상태로 반복 검증할 수 있다.
+- 실기기·Release 빌드와 실제 Supabase 상대방 동기화에는 사용하지 않는다.
+
+관련 파일:
+
+- `WayToYou/Core/Debug/DebugAccount.swift`
+- `docs/debug-simulator.md`
+
+관련 커밋:
+
+- `b83b277 feat: add simulator debug accounts`
 
 ## Supabase 상태
 
@@ -159,8 +176,9 @@ supabase db push
 3. 최신 Heart 흐름을 `승우의 iPhone`에서 재검증
 4. 최신 프로필 사진 크롭·업로드 흐름을 `승우의 iPhone`에서 검증
 5. 프로필 사진 비공개 다운로드와 상대방 표시 end-to-end 검증
-6. Letter·Parcel·Delivery·Archive 흐름 구현
-7. Widget 및 후속 Product Plan 기능 구현
+6. 시뮬레이터 DEBUG 계정으로 Heart·Signal·Parcel 화면 반복 검증
+7. Letter·Parcel·Delivery·Archive 흐름 구현
+8. Widget 및 후속 Product Plan 기능 구현
 
 ## 검증 메모
 
@@ -170,4 +188,5 @@ supabase db push
 - MapKit 온보딩과 무채색 UI 버전은 실기기에서 확인했다.
 - 최신 Signal Swift 변경분은 다음 실기기 빌드에서 재검증해야 한다.
 - 최신 프로필 사진 선택·크롭·업로드 변경분도 다음 실기기 빌드에서 재검증해야 한다.
+- DEBUG 계정 흐름은 시뮬레이터 전용 검증 경로로 문서화했다.
 - 앱 인증 토큰은 iOS Keychain을 사용하며, Keychain은 Supabase DB가 아니라 기기 내부의 보호된 인증 저장소다.
