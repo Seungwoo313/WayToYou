@@ -5,16 +5,26 @@ struct RemoteProfile: Decodable {
     let id: UUID
     let displayName: String
     let endpoint: RouteEndpoint?
+    let avatarPath: String?
+    let avatarUpdatedAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case id
         case displayName = "display_name"
         case endpoint = "route_endpoint"
+        case avatarPath = "avatar_path"
+        case avatarUpdatedAt = "avatar_updated_at"
     }
 
     var profile: UserProfile? {
         guard let endpoint else { return nil }
-        return UserProfile(id: id, displayName: displayName, endpoint: endpoint)
+        return UserProfile(
+            id: id,
+            displayName: displayName,
+            endpoint: endpoint,
+            avatarPath: avatarPath,
+            avatarUpdatedAt: avatarUpdatedAt
+        )
     }
 }
 
@@ -91,6 +101,8 @@ struct RemoteSignalEvent: Decodable {
 }
 
 struct SupabaseConnectionService {
+    private static let profilePhotoBucket = "wty-profile-photos"
+
     private let client: SupabaseClient
 
     init(client: SupabaseClient) {
@@ -176,8 +188,62 @@ struct SupabaseConnectionService {
             .execute()
             .value
     }
+
+    func uploadProfileAvatar(data: Data, userID: UUID) async throws -> UserProfile {
+        guard !data.isEmpty, data.count <= 1_048_576 else {
+            throw SupabaseConnectionError.invalidAvatarData
+        }
+
+        let path = Self.avatarPath(for: userID)
+        try await client.storage
+            .from(Self.profilePhotoBucket)
+            .upload(
+                path,
+                data: data,
+                options: FileOptions(
+                    cacheControl: "0",
+                    contentType: "image/jpeg",
+                    upsert: true
+                )
+            )
+
+        let remote: RemoteProfile = try await client
+            .rpc("wty_set_profile_avatar")
+            .execute()
+            .value
+        guard let profile = remote.profile else { throw SupabaseConnectionError.incompleteProfile }
+        return profile
+    }
+
+    func downloadProfileAvatar(path: String, updatedAt: Date?) async throws -> Data {
+        let cacheNonce = updatedAt.map {
+            String(Int(($0.timeIntervalSince1970 * 1_000).rounded()))
+        }
+        return try await client.storage
+            .from(Self.profilePhotoBucket)
+            .download(path: path, cacheNonce: cacheNonce)
+    }
+
+    func clearProfileAvatar(userID: UUID) async throws -> UserProfile {
+        let remote: RemoteProfile = try await client
+            .rpc("wty_clear_profile_avatar")
+            .execute()
+            .value
+        guard let profile = remote.profile else { throw SupabaseConnectionError.incompleteProfile }
+
+        // RPC가 먼저 접근을 끊는다. 실제 객체 정리가 실패해도 상대는 더 이상 읽을 수 없다.
+        _ = try? await client.storage
+            .from(Self.profilePhotoBucket)
+            .remove(paths: [Self.avatarPath(for: userID)])
+        return profile
+    }
+
+    private static func avatarPath(for userID: UUID) -> String {
+        "\(userID.uuidString.lowercased())/avatar.jpg"
+    }
 }
 
 enum SupabaseConnectionError: Error {
     case incompleteProfile
+    case invalidAvatarData
 }

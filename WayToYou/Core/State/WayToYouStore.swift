@@ -19,6 +19,9 @@ final class WayToYouStore {
     private(set) var connectionMessage: String?
     private(set) var heartMessage: String?
     private(set) var signalMessage: String?
+    private(set) var avatarIsWorking = false
+    private(set) var avatarMessage: String?
+    private(set) var avatarDataByUserID: [UUID: Data] = [:]
 
     /// 서버가 없는 동안 상대 쪽 반응을 흉내 낸다.
     /// 배송 시간도 압축돼서 전체 루프를 몇 분 안에 볼 수 있다.
@@ -52,6 +55,7 @@ final class WayToYouStore {
     private var activeUserID: UUID?
     private var hasSyncedHearts = false
     private var hasSyncedSignals = false
+    private var avatarRevisionByUserID: [UUID: String] = [:]
 
     private enum Key {
         static let myProfile = "wty.myProfile"
@@ -188,6 +192,10 @@ final class WayToYouStore {
         demoMode ? Demo.flightDuration : CoupleDistance.deliveryDuration(from: homeCity, to: partnerCity)
     }
 
+    func avatarData(for profile: UserProfile) -> Data? {
+        avatarDataByUserID[profile.id]
+    }
+
     // MARK: - Intents
 
     /// 인증 계정마다 로컬 캐시를 분리하고, 서버의 최신 프로필·연결 상태를 불러온다.
@@ -198,6 +206,8 @@ final class WayToYouStore {
         if activeUserID != userID {
             activeUserID = userID
             loadActiveUserState()
+            avatarDataByUserID = [:]
+            avatarRevisionByUserID = [:]
         }
 
         await refreshConnection()
@@ -246,6 +256,85 @@ final class WayToYouStore {
         } catch {
             connectionMessage = Self.friendlyConnectionError(error)
             return false
+        }
+    }
+
+    @discardableResult
+    func uploadProfileAvatar(_ data: Data) async -> Bool {
+        guard let backendConnectionService, let activeUserID else { return false }
+
+        avatarIsWorking = true
+        avatarMessage = nil
+        defer { avatarIsWorking = false }
+
+        do {
+            let profile = try await backendConnectionService.uploadProfileAvatar(
+                data: data,
+                userID: activeUserID
+            )
+            applyMyProfile(profile)
+            avatarDataByUserID[profile.id] = data
+            avatarRevisionByUserID[profile.id] = Self.avatarRevision(for: profile)
+            return true
+        } catch {
+            avatarMessage = Self.friendlyAvatarError(error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func clearProfileAvatar() async -> Bool {
+        guard let backendConnectionService, let activeUserID else { return false }
+
+        avatarIsWorking = true
+        avatarMessage = nil
+        defer { avatarIsWorking = false }
+
+        do {
+            let profile = try await backendConnectionService.clearProfileAvatar(userID: activeUserID)
+            applyMyProfile(profile)
+            avatarDataByUserID.removeValue(forKey: profile.id)
+            avatarRevisionByUserID.removeValue(forKey: profile.id)
+            return true
+        } catch {
+            avatarMessage = Self.friendlyAvatarError(error)
+            return false
+        }
+    }
+
+    func clearAvatarMessage() {
+        avatarMessage = nil
+    }
+
+    func refreshProfileAvatars() async {
+        guard let backendConnectionService else { return }
+
+        let profiles = [myProfile, partnerProfile].compactMap { $0 }
+        let activeIDs = Set(profiles.map(\.id))
+        avatarDataByUserID = avatarDataByUserID.filter { activeIDs.contains($0.key) }
+        avatarRevisionByUserID = avatarRevisionByUserID.filter { activeIDs.contains($0.key) }
+
+        for profile in profiles {
+            guard let path = profile.avatarPath else {
+                avatarDataByUserID.removeValue(forKey: profile.id)
+                avatarRevisionByUserID.removeValue(forKey: profile.id)
+                continue
+            }
+
+            let revision = Self.avatarRevision(for: profile)
+            guard avatarRevisionByUserID[profile.id] != revision else { continue }
+
+            do {
+                let remoteData = try await backendConnectionService.downloadProfileAvatar(
+                    path: path,
+                    updatedAt: profile.avatarUpdatedAt
+                )
+                let displayData = try ProfileAvatarProcessor.jpegData(from: remoteData)
+                avatarDataByUserID[profile.id] = displayData
+                avatarRevisionByUserID[profile.id] = revision
+            } catch {
+                // 네트워크가 잠깐 끊겨도 이미 표시 중인 사진은 유지한다.
+            }
         }
     }
 
@@ -301,6 +390,7 @@ final class WayToYouStore {
                 return false
             }
             applyRemoteConnectionState(state)
+            await refreshProfileAvatars()
             return isConnected
         } catch {
             connectionMessage = Self.friendlyConnectionError(error)
@@ -315,6 +405,7 @@ final class WayToYouStore {
         do {
             let state = try await backendConnectionService.connectionState()
             applyRemoteConnectionState(state)
+            await refreshProfileAvatars()
             connectionMessage = nil
         } catch {
             connectionMessage = Self.friendlyConnectionError(error)
@@ -601,6 +692,18 @@ final class WayToYouStore {
         connectionStatus = .connected(connection)
     }
 
+    private func applyMyProfile(_ profile: UserProfile) {
+        myProfile = profile
+        homeCityID = profile.cityID
+        synchronizeMyProfileIntoConnection()
+        save()
+    }
+
+    private static func avatarRevision(for profile: UserProfile) -> String {
+        let timestamp = profile.avatarUpdatedAt?.timeIntervalSince1970 ?? 0
+        return "\(profile.avatarPath ?? "none")|\(timestamp)"
+    }
+
     private func storageKey(_ base: String) -> String {
         guard let activeUserID else { return base }
         return "wty.user.\(activeUserID.uuidString).\(base)"
@@ -720,6 +823,20 @@ final class WayToYouStore {
             }
         }
         return "Signal을 보내지 못했어요. 잠시 후 다시 시도해주세요."
+    }
+
+    private static func friendlyAvatarError(_ error: Error) -> String {
+        if let postgrestError = error as? PostgrestError {
+            switch postgrestError.message {
+            case "profile_required":
+                return "이름과 도시를 먼저 저장해주세요."
+            case "avatar_upload_required":
+                return "사진 업로드가 완료되지 않았어요. 다시 선택해주세요."
+            default:
+                break
+            }
+        }
+        return "프로필 사진을 저장하지 못했어요. 잠시 후 다시 시도해주세요."
     }
 
     private static func partnerProfile(

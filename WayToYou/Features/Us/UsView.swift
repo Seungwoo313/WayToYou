@@ -1,4 +1,6 @@
+import PhotosUI
 import SwiftUI
+import UIKit
 
 struct UsView: View {
     @Bindable var store: WayToYouStore
@@ -6,6 +8,9 @@ struct UsView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingReset = false
+    @State private var selectedAvatarItem: PhotosPickerItem?
+    @State private var isProcessingAvatar = false
+    @State private var avatarSelectionMessage: String?
 
     init(store: WayToYouStore, presentedAsSheet: Bool = true) {
         self.store = store
@@ -22,10 +27,10 @@ struct UsView: View {
                         routeSection
 
                         if let me = store.myProfile {
-                            endpointSection(title: "나", profile: me, tint: Palette.me)
+                            endpointSection(title: "나", profile: me)
                         }
                         if let partner = store.partnerProfile {
-                            endpointSection(title: "상대", profile: partner, tint: Palette.you)
+                            endpointSection(title: "상대", profile: partner)
                         }
 
                         section("두 사람 사이") {
@@ -85,6 +90,9 @@ struct UsView: View {
             } message: {
                 Text("현재 기기에 저장된 데모 소포와 시그널이 삭제돼요.")
             }
+            .onChange(of: selectedAvatarItem) { _, item in
+                Task { await uploadAvatar(from: item) }
+            }
         }
         .presentationBackground(Palette.space)
     }
@@ -114,14 +122,25 @@ struct UsView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func endpointSection(title: String, profile: UserProfile, tint: Color) -> some View {
-        section(title) {
+    private func endpointSection(title: String, profile: UserProfile) -> some View {
+        let isMine = profile.id == store.myProfile?.id
+        return section(title) {
             HStack(alignment: .top, spacing: Metric.m) {
-                Circle()
-                    .fill(tint)
-                    .frame(width: 9, height: 9)
-                    .shadow(color: tint.opacity(0.7), radius: 5)
-                    .padding(.top, 6)
+                if isMine {
+                    ProfileAvatarPicker(
+                        selection: $selectedAvatarItem,
+                        data: store.avatarData(for: profile),
+                        displayName: profile.displayName,
+                        isWorking: isProcessingAvatar || store.avatarIsWorking,
+                        size: 58
+                    )
+                } else {
+                    ProfileAvatarImage(
+                        data: store.avatarData(for: profile),
+                        displayName: profile.displayName,
+                        size: 58
+                    )
+                }
 
                 VStack(alignment: .leading, spacing: Metric.s) {
                     Text(profile.displayName)
@@ -138,6 +157,62 @@ struct UsView: View {
 
                 Spacer(minLength: 0)
             }
+
+            if isMine {
+                HStack {
+                    Text("사진을 누르면 변경할 수 있어요")
+                        .font(.rounded(.caption))
+                        .foregroundStyle(Palette.textTertiary)
+
+                    Spacer()
+
+                    if profile.avatarPath != nil {
+                        Button("사진 삭제", role: .destructive) {
+                            Task {
+                                if await store.clearProfileAvatar() {
+                                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                                }
+                            }
+                        }
+                        .font(.rounded(.caption, .medium))
+                        .foregroundStyle(Palette.textSecondary)
+                        .disabled(store.avatarIsWorking || isProcessingAvatar)
+                    }
+                }
+
+                if let message = avatarSelectionMessage ?? store.avatarMessage {
+                    Label(message, systemImage: "exclamationmark.circle.fill")
+                        .font(.rounded(.caption, .medium))
+                        .foregroundStyle(Palette.you)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func uploadAvatar(from item: PhotosPickerItem?) async {
+        guard let item else { return }
+
+        isProcessingAvatar = true
+        avatarSelectionMessage = nil
+        store.clearAvatarMessage()
+        defer {
+            isProcessingAvatar = false
+            selectedAvatarItem = nil
+        }
+
+        do {
+            guard let sourceData = try await item.loadTransferable(type: Data.self) else {
+                throw ProfileAvatarProcessingError.invalidImage
+            }
+            let processed = try await Task.detached(priority: .userInitiated) {
+                try ProfileAvatarProcessor.jpegData(from: sourceData)
+            }.value
+            if await store.uploadProfileAvatar(processed) {
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            }
+        } catch {
+            avatarSelectionMessage = "사진을 불러오지 못했어요. 다른 사진을 선택해주세요."
         }
     }
 

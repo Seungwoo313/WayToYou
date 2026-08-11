@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -10,15 +11,28 @@ struct ConnectionOnboardingView: View {
     @State private var isPickingEndpoint = false
     @State private var isEditingProfile = false
     @State private var isEnteringCode = false
+    @State private var selectedAvatarItem: PhotosPickerItem?
+    @State private var draftAvatarData: Data?
+    @State private var avatarWasEdited = false
+    @State private var isProcessingAvatar = false
+    @State private var avatarSelectionMessage: String?
 
     init(store: WayToYouStore, suggestedName: String? = nil) {
         self.store = store
         _draftName = State(initialValue: store.myProfile?.displayName ?? suggestedName ?? "")
         _draftEndpoint = State(initialValue: store.myProfile?.endpoint)
+        _draftAvatarData = State(
+            initialValue: store.myProfile.flatMap { store.avatarData(for: $0) }
+        )
     }
 
     private var canSaveProfile: Bool {
         !draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draftEndpoint != nil
+    }
+
+    private var draftHasAvatar: Bool {
+        if avatarWasEdited { return draftAvatarData != nil }
+        return draftAvatarData != nil || store.myProfile?.avatarPath != nil
     }
 
     var body: some View {
@@ -56,6 +70,9 @@ struct ConnectionOnboardingView: View {
                     .presentationBackground(Palette.space)
             }
             .task { await pollForConnection() }
+            .onChange(of: selectedAvatarItem) { _, item in
+                Task { await loadAvatar(from: item) }
+            }
         }
     }
 
@@ -64,10 +81,36 @@ struct ConnectionOnboardingView: View {
             header(
                 step: "1 / 2",
                 title: "먼저, 나를 알려주세요",
-                detail: "상대에게 보일 이름과, 두 사람의 Route가 시작될 도시와 공항을 설정해요."
+                detail: "상대에게 보일 사진과 이름, 두 사람의 Route가 시작될 도시와 공항을 설정해요."
             )
 
             VStack(alignment: .leading, spacing: Metric.l) {
+                VStack(spacing: Metric.s) {
+                    ProfileAvatarPicker(
+                        selection: $selectedAvatarItem,
+                        data: draftAvatarData,
+                        displayName: draftName,
+                        isWorking: isProcessingAvatar || store.avatarIsWorking,
+                        size: 84
+                    )
+
+                    Text(draftHasAvatar ? "사진 변경" : "사진 추가")
+                        .font(.rounded(.caption, .medium))
+                        .foregroundStyle(Palette.textSecondary)
+
+                    if draftHasAvatar {
+                        Button("사진 삭제") {
+                            draftAvatarData = nil
+                            avatarWasEdited = true
+                            avatarSelectionMessage = nil
+                        }
+                        .font(.rounded(.caption2, .medium))
+                        .foregroundStyle(Palette.textTertiary)
+                        .buttonStyle(.plain)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+
                 VStack(alignment: .leading, spacing: Metric.s) {
                     Text("이름")
                         .font(.rounded(.caption, .semibold))
@@ -128,19 +171,38 @@ struct ConnectionOnboardingView: View {
                         displayName: draftName,
                         endpoint: draftEndpoint
                     )
-                    if saved {
-                        isEditingProfile = false
-                        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                    guard saved else { return }
+
+                    if avatarWasEdited {
+                        let avatarSaved: Bool
+                        if let draftAvatarData {
+                            avatarSaved = await store.uploadProfileAvatar(draftAvatarData)
+                        } else if store.myProfile?.avatarPath != nil {
+                            avatarSaved = await store.clearProfileAvatar()
+                        } else {
+                            avatarSaved = true
+                        }
+                        guard avatarSaved else { return }
+                        avatarWasEdited = false
                     }
+
+                    isEditingProfile = false
+                    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
                 }
             } label: {
                 actionLabel("계속하기", systemImage: "arrow.right")
             }
             .buttonStyle(.glassProminent)
             .tint(.white)
-            .disabled(!canSaveProfile || store.connectionIsWorking)
+            .disabled(
+                !canSaveProfile
+                || store.connectionIsWorking
+                || store.avatarIsWorking
+                || isProcessingAvatar
+            )
 
             connectionError
+            avatarError
         }
     }
 
@@ -200,6 +262,9 @@ struct ConnectionOnboardingView: View {
             Button {
                 draftName = store.myProfile?.displayName ?? ""
                 draftEndpoint = store.myProfile?.endpoint
+                draftAvatarData = store.myProfile.flatMap { store.avatarData(for: $0) }
+                avatarWasEdited = false
+                avatarSelectionMessage = nil
                 isEditingProfile = true
             } label: {
                 Text("내 정보 수정")
@@ -273,7 +338,7 @@ struct ConnectionOnboardingView: View {
 
     @ViewBuilder
     private func actionLabel(_ title: String, systemImage: String) -> some View {
-        if store.connectionIsWorking {
+        if store.connectionIsWorking || store.avatarIsWorking {
             ProgressView()
                 .tint(.black)
                 .frame(maxWidth: .infinity)
@@ -294,6 +359,41 @@ struct ConnectionOnboardingView: View {
                 .font(.rounded(.caption, .medium))
                 .foregroundStyle(Palette.you)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var avatarError: some View {
+        if let message = avatarSelectionMessage ?? store.avatarMessage {
+            Label(message, systemImage: "exclamationmark.circle.fill")
+                .font(.rounded(.caption, .medium))
+                .foregroundStyle(Palette.you)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func loadAvatar(from item: PhotosPickerItem?) async {
+        guard let item else { return }
+
+        isProcessingAvatar = true
+        avatarSelectionMessage = nil
+        store.clearAvatarMessage()
+        defer {
+            isProcessingAvatar = false
+            selectedAvatarItem = nil
+        }
+
+        do {
+            guard let sourceData = try await item.loadTransferable(type: Data.self) else {
+                throw ProfileAvatarProcessingError.invalidImage
+            }
+            let processed = try await Task.detached(priority: .userInitiated) {
+                try ProfileAvatarProcessor.jpegData(from: sourceData)
+            }.value
+            draftAvatarData = processed
+            avatarWasEdited = true
+        } catch {
+            avatarSelectionMessage = "사진을 불러오지 못했어요. 다른 사진을 선택해주세요."
         }
     }
 
@@ -326,6 +426,12 @@ struct ConnectionOnboardingView: View {
 
     private func profileCard(_ profile: UserProfile) -> some View {
         HStack(spacing: Metric.l) {
+            ProfileAvatarImage(
+                data: store.avatarData(for: profile),
+                displayName: profile.displayName,
+                size: 50
+            )
+
             VStack(alignment: .leading, spacing: 3) {
                 Text(profile.displayName)
                     .font(.rounded(.headline, .semibold))

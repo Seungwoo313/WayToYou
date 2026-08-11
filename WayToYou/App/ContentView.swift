@@ -47,6 +47,7 @@ struct ContentView: View {
         .task(id: "\(scenePhase)-\(store.isConnected)") { await runClock() }
         .task(id: "heart-\(scenePhase)-\(store.isConnected)") { await syncHeartBursts() }
         .task(id: "signal-\(scenePhase)-\(store.isConnected)") { await syncSignals() }
+        .task(id: "profile-\(scenePhase)-\(store.isConnected)") { await syncProfiles() }
         .sheet(item: $route.presented) { destination in
             sheet(for: destination)
         }
@@ -279,6 +280,15 @@ struct ContentView: View {
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             }
             try? await Task.sleep(for: .seconds(4))
+        }
+    }
+
+    private func syncProfiles() async {
+        guard scenePhase == .active, store.isConnected else { return }
+
+        while !Task.isCancelled {
+            await store.refreshConnection()
+            try? await Task.sleep(for: .seconds(30))
         }
     }
 

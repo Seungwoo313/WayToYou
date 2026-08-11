@@ -7,11 +7,21 @@ struct UserProfile: Identifiable, Codable, Hashable {
     let id: UUID
     var displayName: String
     var endpoint: RouteEndpoint
+    var avatarPath: String?
+    var avatarUpdatedAt: Date?
 
-    init(id: UUID = UUID(), displayName: String, endpoint: RouteEndpoint) {
+    init(
+        id: UUID = UUID(),
+        displayName: String,
+        endpoint: RouteEndpoint,
+        avatarPath: String? = nil,
+        avatarUpdatedAt: Date? = nil
+    ) {
         self.id = id
         self.displayName = displayName
         self.endpoint = endpoint
+        self.avatarPath = avatarPath
+        self.avatarUpdatedAt = avatarUpdatedAt
     }
 
     var city: CoupleCity { endpoint.city.coupleCity }
