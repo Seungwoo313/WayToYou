@@ -1,4 +1,3 @@
-import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -11,10 +10,8 @@ struct ConnectionOnboardingView: View {
     @State private var isPickingEndpoint = false
     @State private var isEditingProfile = false
     @State private var isEnteringCode = false
-    @State private var selectedAvatarItem: PhotosPickerItem?
     @State private var draftAvatarData: Data?
     @State private var avatarWasEdited = false
-    @State private var isProcessingAvatar = false
     @State private var avatarSelectionMessage: String?
 
     init(store: WayToYouStore, suggestedName: String? = nil) {
@@ -70,9 +67,6 @@ struct ConnectionOnboardingView: View {
                     .presentationBackground(Palette.space)
             }
             .task { await pollForConnection() }
-            .onChange(of: selectedAvatarItem) { _, item in
-                Task { await loadAvatar(from: item) }
-            }
         }
     }
 
@@ -87,27 +81,28 @@ struct ConnectionOnboardingView: View {
             VStack(alignment: .leading, spacing: Metric.l) {
                 VStack(spacing: Metric.s) {
                     ProfileAvatarPicker(
-                        selection: $selectedAvatarItem,
                         data: draftAvatarData,
+                        hasAvatar: draftHasAvatar,
                         displayName: draftName,
-                        isWorking: isProcessingAvatar || store.avatarIsWorking,
-                        size: 84
+                        isWorking: store.avatarIsWorking,
+                        size: 84,
+                        onImageReady: { data in
+                            draftAvatarData = data
+                            avatarWasEdited = true
+                            avatarSelectionMessage = nil
+                        },
+                        onUseDefault: {
+                            draftAvatarData = nil
+                            avatarWasEdited = true
+                            avatarSelectionMessage = nil
+                        },
+                        onError: { avatarSelectionMessage = $0 }
                     )
 
                     Text(draftHasAvatar ? "사진 변경" : "사진 추가")
                         .font(.rounded(.caption, .medium))
                         .foregroundStyle(Palette.textSecondary)
 
-                    if draftHasAvatar {
-                        Button("사진 삭제") {
-                            draftAvatarData = nil
-                            avatarWasEdited = true
-                            avatarSelectionMessage = nil
-                        }
-                        .font(.rounded(.caption2, .medium))
-                        .foregroundStyle(Palette.textTertiary)
-                        .buttonStyle(.plain)
-                    }
                 }
                 .frame(maxWidth: .infinity)
 
@@ -198,7 +193,6 @@ struct ConnectionOnboardingView: View {
                 !canSaveProfile
                 || store.connectionIsWorking
                 || store.avatarIsWorking
-                || isProcessingAvatar
             )
 
             connectionError
@@ -369,31 +363,6 @@ struct ConnectionOnboardingView: View {
                 .font(.rounded(.caption, .medium))
                 .foregroundStyle(Palette.you)
                 .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private func loadAvatar(from item: PhotosPickerItem?) async {
-        guard let item else { return }
-
-        isProcessingAvatar = true
-        avatarSelectionMessage = nil
-        store.clearAvatarMessage()
-        defer {
-            isProcessingAvatar = false
-            selectedAvatarItem = nil
-        }
-
-        do {
-            guard let sourceData = try await item.loadTransferable(type: Data.self) else {
-                throw ProfileAvatarProcessingError.invalidImage
-            }
-            let processed = try await Task.detached(priority: .userInitiated) {
-                try ProfileAvatarProcessor.jpegData(from: sourceData)
-            }.value
-            draftAvatarData = processed
-            avatarWasEdited = true
-        } catch {
-            avatarSelectionMessage = "사진을 불러오지 못했어요. 다른 사진을 선택해주세요."
         }
     }
 

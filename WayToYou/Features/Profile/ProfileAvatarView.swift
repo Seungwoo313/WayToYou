@@ -1,4 +1,3 @@
-import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -34,40 +33,5 @@ struct ProfileAvatarImage: View {
     private var initial: String {
         let cleaned = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned.first.map { String($0).uppercased() } ?? "?"
-    }
-}
-
-struct ProfileAvatarPicker: View {
-    @Binding var selection: PhotosPickerItem?
-
-    let data: Data?
-    let displayName: String
-    let isWorking: Bool
-    var size: CGFloat = 76
-
-    var body: some View {
-        PhotosPicker(selection: $selection, matching: .images) {
-            ZStack(alignment: .bottomTrailing) {
-                ProfileAvatarImage(data: data, displayName: displayName, size: size)
-
-                Image(systemName: data == nil ? "plus" : "pencil")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 23, height: 23)
-                    .background(Color.black, in: Circle())
-                    .overlay { Circle().strokeBorder(Color.white.opacity(0.7), lineWidth: 1) }
-            }
-            .overlay {
-                if isWorking {
-                    Circle()
-                        .fill(Color.black.opacity(0.55))
-                        .frame(width: size, height: size)
-                        .overlay { ProgressView().tint(.white) }
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(isWorking)
-        .accessibilityHint("사진 보관함에서 새 프로필 사진을 선택합니다")
     }
 }
