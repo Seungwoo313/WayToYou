@@ -6,43 +6,39 @@
 
 브랜치: `codex/product-plan-mvp`
 
-문서 작성 시작 기준 HEAD: `0c4b3fb docs: mark implementation statuses`
+문서 작성 시작 기준 HEAD: `ba6b9b6 feat: add city profile markers`
 
 이 문서는 다음 채팅에서 현재 작업을 다시 조사하지 않고 곧바로 이어가기 위한 기준 문서다. 다음 작업을 시작할 때 이 문서와 `git status`, 최근 `git log`를 먼저 확인한다.
 
 ## 1. 지금 바로 이어서 할 일
 
-다음 구현은 **MapKit 지구본 위에 두 사람의 원형 프로필 마커를 도시 좌표 기준으로 표시하는 것**이다.
+도시 중심 프로필 마커는 `ba6b9b6 feat: add city profile markers`에서 완료됐다. 다음 구현은 **프로필 마커를 탭했을 때 이름과 도시/국가만 보여주는 작은 정보 UI**다.
 
-현재 `GlobeMapView`에는 위성 지구본과 카메라 동작만 있고 annotation이 없다. 첫 단계에서는 다른 기능을 섞지 말고 아래 범위까지만 구현한다.
+다음 단계에서는 다른 기능을 섞지 말고 아래 범위까지만 구현한다.
 
-1. 내 프로필과 상대 프로필을 각각 저장된 `RouteCity.latitude/longitude`에 표시한다.
-2. 실제 좌표 앵커에는 작은 흰 점을 두고, 짧고 얇은 선 위에 42~46pt 원형 프로필 사진을 띄운다.
-3. 사진은 흰 테두리와 아주 약한 그림자를 사용한다.
-4. 사진이 없으면 현재 `ProfileAvatarImage`와 같은 이니셜 fallback을 사용한다.
-5. 공항 좌표와 공항명은 이 마커에 사용하지 않는다.
-6. 사진 데이터만 변경됐을 때 카메라가 초기화되거나 사용자의 지구본 조작이 리셋되지 않아야 한다.
-7. `mina` DEBUG 계정으로 서울·Paris 두 마커를 시뮬레이터에서 확인한다.
+1. 내 마커와 상대 마커를 탭할 수 있게 한다.
+2. 선택된 마커 가까이에 이름과 도시/국가만 간결하게 표시한다.
+3. 일반적인 MapKit callout을 쓸지, 현재 흑백 UI에 맞는 작은 custom overlay를 쓸지 기존 홈 레이아웃과 실제 기기 화면을 보고 결정한다.
+4. 지구본 팬·핀치·회전·기울기와 충돌하지 않게 한다.
+5. 빈 공간을 탭하거나 다른 마커를 선택했을 때 자연스럽게 닫히거나 전환돼야 한다.
+6. 선택 상태 변경은 카메라를 초기화하지 않아야 한다.
+7. Route 선, 비행 중 소포, 공항 선택은 이 커밋에 넣지 않는다.
 
-첫 커밋의 권장 단위는 `feat: add city profile markers`다. 마커 탭 상세 정보, 두 도시를 잇는 선, 비행 중 소포는 후속 커밋으로 분리한다.
+첫 커밋의 권장 단위는 `feat: add profile marker details`다.
 
 ### 예상 수정 지점
 
 - `WayToYou/Features/Home/GlobeMapView.swift`
-  - 두 사람의 프로필/아바타 정보를 받을 입력 모델 추가
-  - 두 개의 `MKAnnotation` 동기화
-  - 원형 사진용 커스텀 `MKAnnotationView`
-- `WayToYou/App/ContentView.swift`
-  - `store.myProfile`, `store.partnerProfile`, `store.avatarData(for:)`를 지구본에 전달
-- 필요하면 `WayToYou/Features/Profile/ProfileAvatarView.swift`
-  - 기존 fallback 표현을 재사용할 수 있는 최소 범위만 조정
+  - annotation 선택 이벤트 처리
+  - 선택된 마커 정보 UI 표시와 해제
+- 필요하면 `WayToYou/App/ContentView.swift`
+  - SwiftUI overlay가 더 적합할 때만 최소 상태 연결
 
-### 첫 단계 완료 조건
+### 다음 단계 완료 조건
 
-- 서울·Paris 도시 중심에 프로필 마커 두 개가 보인다.
-- 확대·축소·회전·팬 중에도 마커가 MapKit 좌표에 붙어 있다.
-- 내 사진 변경 시 홈으로 돌아오면 새 사진이 보인다.
-- 공항에는 프로필 마커가 생기지 않는다.
+- 두 마커를 각각 탭하면 올바른 이름과 도시/국가가 보인다.
+- 지도 제스처가 기존처럼 자연스럽고 선택 상태가 카메라를 바꾸지 않는다.
+- 정보 UI가 상단 시간, 하단 액션과 탭 바를 침범하지 않는다.
 - iPhone 17 시뮬레이터 DEBUG 계정 검증 후 `승우의 iPhone`에서 빌드·설치·실행한다.
 - 변경분을 확인하고 작은 단위로 커밋한다.
 
@@ -120,7 +116,7 @@
 | 비공개 프로필 사진 Storage/RLS | 원격 적용 완료 | 실제 연결 상대 다운로드 권한 E2E 확인 |
 | 프로필 성공 토스트 | 구현 완료 | 실기기 시각·VoiceOver 확인 |
 | DEBUG 시뮬레이터 계정 | 완료 | 서버 실시간 동기화는 의도적으로 없음 |
-| MapKit 지구본 | 위성 지구본·카메라만 완료 | **도시 프로필 마커가 바로 다음 작업** |
+| MapKit 지구본 | 위성 지구본·동적 카메라·도시 프로필 마커 완료 | 마커 탭 정보 UI가 바로 다음 작업 |
 | Parcel/Letter/Keepsakes | 로컬 데모 흐름 존재 | 서버 저장·상대 전송·공항 선택·제품 UX 구현 필요 |
 | Polaroid·Voice Tape | 미착수 | Product Plan 후속 단계 |
 | Widget | 미착수 | Signal/Heart App Intent 포함 설계 필요 |
@@ -151,7 +147,13 @@
 - 지구본은 `MKImageryMapConfiguration(elevationStyle: .realistic)`을 사용한다.
 - 팬·핀치·회전·기울기·관성은 MapKit 기본 동작을 유지한다.
 - 카메라 경계는 투영 붕괴 방지를 위해 위도 **±70°**다.
-- 현재 지구본에는 두 도시 프로필 marker와 Route line이 아직 없다.
+- 두 사람의 프로필은 공항이 아닌 각 도시의 `latitude/longitude`에 표시한다.
+- 마커는 작은 흰 점, 짧은 선, 46pt 원형 사진으로 구성하며 사진이 없으면 기존 이니셜 fallback을 공유한다.
+- 사진·이름 변경은 annotation만 동기화하고 현재 카메라와 사용자 조작 상태는 유지한다.
+- 최초 카메라를 확정한 다음 메인 루프에서 annotation을 추가한다. 순서가 반대면 MapKit이 첫 제스처 전까지 마커 가시성 재계산을 미루는 현상이 있었다.
+- 초기 카메라는 수동으로 잡은 좌표나 거리를 하드코딩하지 않는다. 두 도시의 구면 중점, 실제 하단 UI 여백 비율, 최대 축소 상태를 이용해 계산한다.
+- 위도 보정을 적용하되, 준대척 도시 조합에서도 어느 도시도 지구 뒤로 넘어가지 않도록 구면 지평선 여유로 이동량을 제한한다.
+- Route line은 아직 없다.
 
 주요 파일:
 
@@ -264,7 +266,9 @@ xcrun simctl launch --terminate-running-process booted \
 - 시뮬레이터 UUID: `C5919541-6BEA-4A25-92C7-939A469F18F7`
 - 기본 실기기: `승우의 iPhone`
 - 실기기 UUID: `06D7A8DA-E136-59E0-84EA-33DB46085EEE`
-- 별도 iPhone 14도 paired 상태지만, 작업 완료 검증 기준은 `승우의 iPhone`이다.
+- 추가 실기기: `NXQOEKRJFJCMXM4`, iPhone 14 (`iPhone14,7`)
+- iPhone 14 UUID: `D30BD3D7-C016-5256-A4BD-95F2BA16C751`
+- 작업 완료 검증 기준은 계속 `승우의 iPhone`이며, 이번 도시 프로필 마커 빌드는 iPhone 14에도 설치·실행했다.
 
 문서 작성 시점에 다음 Debug 시뮬레이터 빌드는 성공했다.
 
@@ -277,6 +281,8 @@ xcodebuild \
   -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' \
   build
 ```
+
+도시 프로필 마커 구현은 iPhone 17 시뮬레이터를 완전히 재실행한 뒤 화면을 건드리지 않은 상태에서 두 마커가 즉시 보이는 것까지 확인했다. `승우의 iPhone`과 `NXQOEKRJFJCMXM4` iPhone 14에도 같은 Debug 실기기 빌드를 설치하고 실행했다.
 
 시뮬레이터 설치:
 
@@ -316,25 +322,25 @@ iOS 코드를 수정한 작업은 모두 끝낸 뒤 AGENTS 지침에 따라 `승
 | `b83b277` | 시뮬레이터 DEBUG 계정 2개 구현 |
 | `5a7c8dd` | DEBUG 계정 문서화 |
 | `0c4b3fb` | 진행 상태 문서 정리 |
+| `ba6b9b6` | 도시 중심 프로필 마커와 동적 카메라 구현 |
 
 중간 크롭 실험 커밋(`95b9607`, `fe5becf`, `f28826b`, `76aa126`)은 최종 형태로 가는 과정이다. 현재 HEAD의 코드를 기준으로 판단한다.
 
 ## 10. 다음 구현 순서
 
-작업은 아래 순서를 권장한다. 첫 항목만 먼저 구현하고 검증·커밋한 뒤 다음으로 이동한다.
+작업은 아래 순서를 권장한다. 도시 중심 프로필 마커는 완료됐으므로 첫 항목만 먼저 구현하고 검증·커밋한 뒤 다음으로 이동한다.
 
-1. **도시 중심 프로필 마커 2개**
-2. 마커 탭 시 이름 + 도시/국가만 보여주는 작은 정보 UI
-3. 두 도시를 잇는 절제된 Route 선
-4. 최신 결정에 맞춰 프로필의 도시와 소포의 공항 책임 분리
-5. 소포 작성 시 출발/도착 공항을 MapKit으로 선택하는 UX
-6. 비행 중 Gift annotation과 배송 진행 상태
-7. 실제 두 계정으로 Heart·Signal·프로필 사진 E2E 검증 및 수정
-8. Parcel/Letter/Keepsakes 서버 모델과 상대 전송
-9. Polaroid
-10. Voice Tape
-11. Interactive Widget
-12. 익명 비행기와 Shared World
+1. **마커 탭 시 이름 + 도시/국가만 보여주는 작은 정보 UI**
+2. 두 도시를 잇는 절제된 Route 선
+3. 최신 결정에 맞춰 프로필의 도시와 소포의 공항 책임 분리
+4. 소포 작성 시 출발/도착 공항을 MapKit으로 선택하는 UX
+5. 비행 중 Gift annotation과 배송 진행 상태
+6. 실제 두 계정으로 Heart·Signal·프로필 사진 E2E 검증 및 수정
+7. Parcel/Letter/Keepsakes 서버 모델과 상대 전송
+8. Polaroid
+9. Voice Tape
+10. Interactive Widget
+11. 익명 비행기와 Shared World
 
 ## 11. 다음 채팅 시작 체크리스트
 
@@ -345,7 +351,7 @@ git log --oneline -12
 sed -n '1,240p' docs/next-session-handoff.md
 ```
 
-그 다음 `WayToYou/Features/Home/GlobeMapView.swift`와 `ContentView.home`을 읽고 도시 프로필 마커 한 단계만 구현한다.
+그 다음 `WayToYou/Features/Home/GlobeMapView.swift`의 annotation 선택 경로와 `ContentView.home`을 읽고 마커 정보 UI 한 단계만 구현한다.
 
 작업 중 지켜야 할 것:
 
