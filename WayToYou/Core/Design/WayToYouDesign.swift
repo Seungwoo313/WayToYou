@@ -1,17 +1,17 @@
 import SwiftUI
 
-/// 앱 전체가 공유하는 색. 두 사람에게 각자의 색을 주는 게 이 팔레트의 핵심이다.
-/// 나는 차가운 쪽, 상대는 따뜻한 쪽. 비콘·소포·시그널·궤적이 전부 이 두 색으로 갈린다.
+/// 앱 전체가 공유하는 무채색 팔레트.
+/// 화면의 위계는 색상 대신 명도와 투명도로 구분한다.
 enum Palette {
-    static let space = Color(red: 0.024, green: 0.028, blue: 0.055)
-    static let spaceDeep = Color(red: 0.006, green: 0.008, blue: 0.020)
+    static let space = Color.black
+    static let spaceDeep = Color.black
 
-    static let me = Color(red: 0.51, green: 0.78, blue: 1.00)
-    static let you = Color(red: 1.00, green: 0.55, blue: 0.46)
+    static let me = Color.white
+    static let you = Color(white: 0.72)
 
     /// 입력 필드나 목록 행처럼 별이 비치면 안 되는 표면.
     /// white.opacity(0.05)로 두면 뒤의 별밤이 그대로 뚫고 올라온다.
-    static let surface = Color(red: 0.085, green: 0.094, blue: 0.125)
+    static let surface = Color(white: 0.09)
 
     static let textPrimary = Color.white
     static let textSecondary = Color.white.opacity(0.66)
@@ -90,7 +90,7 @@ struct SpaceBackground: View, Equatable {
                 endPoint: .bottom
             )
 
-            // 상대 쪽 색이 화면 아래에서 아주 옅게 올라온다.
+            // 중성광으로 깊이만 더하고 색조는 만들지 않는다.
             RadialGradient(
                 colors: [Palette.you.opacity(0.10), .clear],
                 center: UnitPoint(x: 0.85, y: 1.05),
