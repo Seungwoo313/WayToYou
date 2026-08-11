@@ -6,8 +6,8 @@ struct ContentView: View {
         case home, keepsakes, us
     }
 
-    @State private var store = WayToYouStore()
-    @State private var backend = SupabaseSessionController()
+    @State private var store: WayToYouStore
+    @State private var backend: SupabaseSessionController
     @State private var now = Date()
     @State private var route = SheetRoute.none
     @State private var selectedTab = AppTab.home
@@ -17,67 +17,99 @@ struct ContentView: View {
     @State private var heartSendTask: Task<Void, Never>?
     @State private var signalPulse = 0
     @Environment(\.scenePhase) private var scenePhase
+    #if DEBUG
+    private let debugAccount: DebugAccount?
+    #endif
+
+    init() {
+        #if DEBUG
+        let debugAccount = DebugAccount.launched
+        self.debugAccount = debugAccount
+        _store = State(
+            initialValue: debugAccount.map(WayToYouStore.init(debugAccount:))
+                ?? WayToYouStore()
+        )
+        #else
+        _store = State(initialValue: WayToYouStore())
+        #endif
+        _backend = State(initialValue: SupabaseSessionController())
+    }
 
     private var focus: HomeFocus { store.focus(at: now) }
 
-    var body: some View {
-        Group {
-            if backend.authenticatedUserID == nil {
-                AppleSignInView(backend: backend)
-            } else if !store.backendIsReady {
-                connectionLoading
-            } else {
-                if store.isConnected {
-                    connectedApp
-                } else {
-                    ConnectionOnboardingView(
-                        store: store,
-                        suggestedName: backend.suggestedDisplayName
-                    )
-                }
-            }
-        }
-        .preferredColorScheme(.dark)
-        .task { await backend.restoreSession() }
-        .task(id: backend.authenticatedUserID) {
-            guard let userID = backend.authenticatedUserID,
-                  let client = backend.client else { return }
-            await store.activateBackend(client: client, userID: userID)
-        }
-        .task(id: "\(scenePhase)-\(store.isConnected)") { await runClock() }
-        .task(id: "heart-\(scenePhase)-\(store.isConnected)") { await syncHeartBursts() }
-        .task(id: "signal-\(scenePhase)-\(store.isConnected)") { await syncSignals() }
-        .task(id: "profile-\(scenePhase)-\(store.isConnected)") { await syncProfiles() }
-        .sheet(item: $route.presented) { destination in
-            sheet(for: destination)
-        }
-        .alert("Heart를 보내지 못했어요", isPresented: heartMessageBinding) {
-            Button("확인", role: .cancel) {}
-        } message: {
-            Text(store.heartMessage ?? "잠시 후 다시 시도해주세요.")
-        }
-        .alert("Signal을 보내지 못했어요", isPresented: signalMessageBinding) {
-            Button("확인", role: .cancel) {}
-        } message: {
-            Text(store.signalMessage ?? "잠시 후 다시 시도해주세요.")
-        }
+    private var isDebugSession: Bool {
         #if DEBUG
-        // 스크린샷용. `simctl launch ... -previewSheet compose`처럼 띄운다.
-        .onAppear {
-            guard store.isConnected else { return }
-            switch UserDefaults.standard.string(forKey: "previewSheet") {
-            case "compose": route = .compose
-            case "signal": route = .signal
-            case "keepsakes": selectedTab = .keepsakes
-            case "us": selectedTab = .us
-            case "letter":
-                if let parcel = store.waitingToOpen(at: .now).first ?? store.lastOpenedIncoming() {
-                    route = .letter(parcel)
-                }
-            default: break
-            }
-        }
+        debugAccount != nil
+        #else
+        false
         #endif
+    }
+
+    var body: some View {
+        appContent
+            .preferredColorScheme(.dark)
+            .task {
+                guard !isDebugSession else { return }
+                await backend.restoreSession()
+            }
+            .task(id: backend.authenticatedUserID) {
+                guard !isDebugSession else { return }
+                guard let userID = backend.authenticatedUserID,
+                      let client = backend.client else { return }
+                await store.activateBackend(client: client, userID: userID)
+            }
+            .task(id: "\(scenePhase)-\(store.isConnected)") { await runClock() }
+            .task(id: "heart-\(scenePhase)-\(store.isConnected)") { await syncHeartBursts() }
+            .task(id: "signal-\(scenePhase)-\(store.isConnected)") { await syncSignals() }
+            .task(id: "profile-\(scenePhase)-\(store.isConnected)") { await syncProfiles() }
+            .sheet(item: $route.presented) { destination in
+                sheet(for: destination)
+            }
+            .alert("Heart를 보내지 못했어요", isPresented: heartMessageBinding) {
+                Button("확인", role: .cancel) {}
+            } message: {
+                Text(store.heartMessage ?? "잠시 후 다시 시도해주세요.")
+            }
+            .alert("Signal을 보내지 못했어요", isPresented: signalMessageBinding) {
+                Button("확인", role: .cancel) {}
+            } message: {
+                Text(store.signalMessage ?? "잠시 후 다시 시도해주세요.")
+            }
+            #if DEBUG
+            // 스크린샷용. `simctl launch ... -previewSheet compose`처럼 띄운다.
+            .onAppear {
+                guard store.isConnected else { return }
+                switch UserDefaults.standard.string(forKey: "previewSheet") {
+                case "compose": route = .compose
+                case "signal": route = .signal
+                case "keepsakes": selectedTab = .keepsakes
+                case "us": selectedTab = .us
+                case "letter":
+                    if let parcel = store.waitingToOpen(at: .now).first ?? store.lastOpenedIncoming() {
+                        route = .letter(parcel)
+                    }
+                default: break
+                }
+            }
+            #endif
+    }
+
+    @ViewBuilder
+    private var appContent: some View {
+        if isDebugSession {
+            connectedApp
+        } else if backend.authenticatedUserID == nil {
+            AppleSignInView(backend: backend)
+        } else if !store.backendIsReady {
+            connectionLoading
+        } else if store.isConnected {
+            connectedApp
+        } else {
+            ConnectionOnboardingView(
+                store: store,
+                suggestedName: backend.suggestedDisplayName
+            )
+        }
     }
 
     private var connectionLoading: some View {
@@ -248,7 +280,7 @@ struct ContentView: View {
     }
 
     private func syncHeartBursts() async {
-        guard scenePhase == .active, store.isConnected else { return }
+        guard !isDebugSession, scenePhase == .active, store.isConnected else { return }
 
         while !Task.isCancelled {
             let received = await store.refreshHeartBursts()
@@ -271,7 +303,7 @@ struct ContentView: View {
     }
 
     private func syncSignals() async {
-        guard scenePhase == .active, store.isConnected else { return }
+        guard !isDebugSession, scenePhase == .active, store.isConnected else { return }
 
         while !Task.isCancelled {
             let received = await store.refreshSignals()
@@ -284,7 +316,7 @@ struct ContentView: View {
     }
 
     private func syncProfiles() async {
-        guard scenePhase == .active, store.isConnected else { return }
+        guard !isDebugSession, scenePhase == .active, store.isConnected else { return }
 
         while !Task.isCancelled {
             await store.refreshConnection()

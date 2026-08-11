@@ -56,6 +56,9 @@ final class WayToYouStore {
     private var hasSyncedHearts = false
     private var hasSyncedSignals = false
     private var avatarRevisionByUserID: [UUID: String] = [:]
+    #if DEBUG
+    private var debugAccount: DebugAccount?
+    #endif
 
     private enum Key {
         static let myProfile = "wty.myProfile"
@@ -110,6 +113,24 @@ final class WayToYouStore {
             defaults.set(Self.encode(connectionStatus), forKey: Key.connectionStatus)
         }
     }
+
+    #if DEBUG
+    convenience init(debugAccount: DebugAccount) {
+        self.init(defaults: debugAccount.defaults)
+        self.debugAccount = debugAccount
+
+        let profile = debugAccount.profile
+        let partner = debugAccount.partnerProfile
+        activeUserID = profile.id
+        myProfile = profile
+        homeCityID = profile.cityID
+        partnerCityID = partner.cityID
+        connectionStatus = .connected(debugAccount.connection)
+        backendIsReady = true
+        demoMode = true
+        save()
+    }
+    #endif
 
     // MARK: - Derived state
 
@@ -237,6 +258,13 @@ final class WayToYouStore {
     @discardableResult
     func saveProfileToBackend(displayName: String, endpoint: RouteEndpoint) async -> Bool {
         let cleanedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        #if DEBUG
+        if debugAccount != nil {
+            guard !cleanedName.isEmpty else { return false }
+            saveProfile(displayName: cleanedName, endpoint: endpoint)
+            return true
+        }
+        #endif
         guard !cleanedName.isEmpty, let backendConnectionService else { return false }
 
         connectionIsWorking = true
@@ -261,6 +289,18 @@ final class WayToYouStore {
 
     @discardableResult
     func uploadProfileAvatar(_ data: Data) async -> Bool {
+        #if DEBUG
+        if debugAccount != nil, var profile = myProfile {
+            avatarIsWorking = true
+            defer { avatarIsWorking = false }
+            profile.avatarPath = "debug/\(profile.id.uuidString.lowercased())/avatar.jpg"
+            profile.avatarUpdatedAt = .now
+            applyMyProfile(profile)
+            avatarDataByUserID[profile.id] = data
+            avatarRevisionByUserID[profile.id] = Self.avatarRevision(for: profile)
+            return true
+        }
+        #endif
         guard let backendConnectionService, let activeUserID else { return false }
 
         avatarIsWorking = true
@@ -284,6 +324,18 @@ final class WayToYouStore {
 
     @discardableResult
     func clearProfileAvatar() async -> Bool {
+        #if DEBUG
+        if debugAccount != nil, var profile = myProfile {
+            avatarIsWorking = true
+            defer { avatarIsWorking = false }
+            profile.avatarPath = nil
+            profile.avatarUpdatedAt = .now
+            applyMyProfile(profile)
+            avatarDataByUserID.removeValue(forKey: profile.id)
+            avatarRevisionByUserID.removeValue(forKey: profile.id)
+            return true
+        }
+        #endif
         guard let backendConnectionService, let activeUserID else { return false }
 
         avatarIsWorking = true
@@ -435,6 +487,20 @@ final class WayToYouStore {
 
     @discardableResult
     func sendSignal(_ signal: CoupleSignal) async -> Bool {
+        #if DEBUG
+        if debugAccount != nil {
+            let event = SignalEvent(
+                id: UUID(),
+                signal: signal,
+                direction: .outgoing,
+                sentAt: .now
+            )
+            signals.append(event)
+            trimSignals()
+            save()
+            return true
+        }
+        #endif
         guard isConnected, let backendConnectionService, let activeUserID else { return false }
 
         signalMessage = nil
@@ -495,6 +561,20 @@ final class WayToYouStore {
 
     @discardableResult
     func sendHeartBurst(count: Int) async -> Bool {
+        #if DEBUG
+        if debugAccount != nil {
+            let burst = HeartBurst(
+                id: UUID(),
+                direction: .outgoing,
+                count: min(max(count, 1), 50),
+                sentAt: .now
+            )
+            heartBursts.append(burst)
+            trimHeartBursts()
+            save()
+            return true
+        }
+        #endif
         guard isConnected, let backendConnectionService, let activeUserID else { return false }
         let boundedCount = min(max(count, 1), 50)
 
