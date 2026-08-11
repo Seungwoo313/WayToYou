@@ -2,12 +2,15 @@
 
 작성일: 2026-08-11
 브랜치: `codex/product-plan-mvp`
-최신 커밋: `b83b277 feat: add simulator debug accounts`
+구현 확인 기준 커밋: `0c4b3fb docs: mark implementation statuses`
+
+다음 채팅에서 이어갈 구체적인 구현 범위와 최신 결정은 `docs/next-session-handoff.md`를 우선한다.
 
 ## 현재 방향
 
 - 기존 사용자는 호환 대상으로 보지 않는다.
 - 도시와 공항은 하드코딩하지 않고 MapKit을 기준으로 조회한다.
+- 프로필 위치는 도시 중심에 두고, 공항은 소포 Route를 정할 때 사용한다.
 - 위치 권한은 사용자가 `현재 위치로 찾기`를 눌렀을 때만 요청한다.
 - UI 크롬은 화이트·블랙·중성 그레이로 유지한다.
 - 새로운 디자인 토큰 레이어는 추가하지 않는다.
@@ -18,15 +21,17 @@
 | 영역 | 상태 | 비고 |
 | --- | --- | --- |
 | 파일 구조·탭 정보 구조 | 완료 | 코드 반영 완료 |
-| MapKit 도시·공항 온보딩 | 완료 | 실기기 검증 완료 |
+| MapKit 도시·공항 검색 | 구현 완료 | 도시 프로필·소포 공항 책임 분리 필요 |
 | 화이트·블랙 UI | 완료 | 실기기 검증 완료 |
-| Heart·Keychain 인증 | 구현 완료 | 최신 실기기 재검증 대기 |
-| 연결된 Signal | 구현 완료 | 원격 DB·실기기 검증 대기 |
+| Apple·Google 인증·Keychain | 구현 완료 | 실제 provider·실기기 재검증 대기 |
+| Heart | 구현 완료 | 실제 두 계정 E2E 검증 대기 |
+| 연결된 Signal | 구현 완료 | 실제 두 계정 E2E 검증 대기 |
 | 프로필 사진 클라이언트 | 구현 완료 | 최신 실기기·상대방 표시 검증 대기 |
-| 프로필 사진 Storage | 마이그레이션 작성 완료 | 원격 DB 적용 대기 |
+| 프로필 사진 Storage | 원격 마이그레이션 적용 완료 | 실제 상대방 권한 검증 대기 |
 | 시뮬레이터 DEBUG 계정 | 완료 | 시뮬레이터 전용 |
-| Supabase CLI | 연결 완료 | `db push` 미실행 |
-| Letter·Delivery·Widget | 미착수 | 다음 Product Plan 단계 |
+| Supabase CLI | 연결·원격 동기화 완료 | 실제 두 계정 E2E 검증 대기 |
+| Letter·Delivery·Keepsakes | 로컬 데모 존재 | 서버 전송·제품 흐름 미구현 |
+| Widget | 미착수 | 다음 Product Plan 단계 |
 
 ## 구현 완료 항목
 
@@ -94,7 +99,7 @@
 
 - `17d996c feat: add connected Signal states`
 
-### 프로필 사진 보안 저장소 — 마이그레이션 작성 완료 · 원격 적용 대기
+### 프로필 사진 보안 저장소 — 원격 적용 완료 · E2E 검증 대기
 
 - 비공개 Supabase Storage bucket 마이그레이션을 추가했다.
 - 사진은 소유자와 현재 연결된 상대만 읽을 수 있도록 Storage 정책을 정의했다.
@@ -146,7 +151,7 @@
 
 - `b83b277 feat: add simulator debug accounts`
 
-## Supabase 상태 — CLI 연결 완료 · 원격 DB 적용 대기
+## Supabase 상태 — CLI 연결·원격 DB 적용 완료
 
 - Supabase Swift SDK와 앱 API 연결은 기존 설정으로 구성되어 있다.
 - Supabase CLI를 설치하고 `supabase init`을 실행했다.
@@ -165,35 +170,28 @@
 - `supabase/migrations/20260811193000_profile_photos.sql`
 - `WayToYou/Services/SupabaseConnectionService.swift`
 
-### 아직 하지 않은 것 — 대기
-
-- `supabase db push`는 아직 실행하지 않았다.
-- 원격 DB의 실제 마이그레이션 적용 상태는 아직 확인하지 않았다.
-- 따라서 원격 DB에 `route_endpoint` 컬럼과 `wty_save_profile(text, jsonb)` 함수가 존재한다고 가정하면 안 된다.
-- Heart 테이블/RPC와 테스트 사용자 초기화 마이그레이션도 원격 DB에 적용됐다고 가정하면 안 된다.
-- Signal 테이블/RPC와 프로필 사진 Storage 정책도 원격 DB에 적용됐다고 가정하면 안 된다.
-- 프로필 저장의 서버 연동을 확인하려면 먼저 `migration list`와 `db push --dry-run`을 실행해야 한다.
-
-다음 확인 순서:
+2026-08-11에 다음 읽기 전용 명령으로 원격 상태를 다시 확인했다.
 
 ```bash
 supabase migration list
 supabase db push --dry-run
-supabase db push
 ```
 
-`migration list`에서 기존 원격 이력과 로컬 파일이 어긋나면 `migration repair`를 바로 실행하지 말고 원인을 먼저 확인한다.
+- 6개 로컬 migration이 모두 같은 version으로 원격에 적용돼 있다.
+- `db push --dry-run` 결과는 `Remote database is up to date.`다.
+- migration 적용과 실제 앱 E2E 검증은 별개다.
+- Apple·Google 로그인, 두 실제 계정 연결, Heart·Signal 송수신, 상대 프로필 사진 다운로드 권한은 아직 다시 확인해야 한다.
+- 이후 이력이 어긋나면 `migration repair`를 바로 실행하지 말고 원인을 먼저 확인한다.
 
 ## 다음 작업 순서 — 대기 및 미착수
 
-1. 다른 작업공간에서 Supabase 마이그레이션 상태 확인 및 필요 시 적용
-2. 원격 DB 적용 후 프로필 저장·복원 end-to-end 검증
-3. 최신 Heart 흐름을 `승우의 iPhone`에서 재검증
-4. 최신 프로필 사진 크롭·업로드 흐름을 `승우의 iPhone`에서 검증
-5. 프로필 사진 비공개 다운로드와 상대방 표시 end-to-end 검증
-6. 시뮬레이터 DEBUG 계정으로 Heart·Signal·Parcel 화면 반복 검증
-7. Letter·Parcel·Delivery·Archive 흐름 구현
-8. Widget 및 후속 Product Plan 기능 구현
+1. MapKit 지구본의 두 도시 중심에 원형 프로필 마커 표시
+2. 프로필에는 도시, 소포 Route에는 공항을 쓰는 최신 방향으로 모델·UI 책임 분리
+3. 프로필 저장·복원과 비공개 상대 사진 표시 end-to-end 검증
+4. 최신 Heart·Signal 흐름을 실제 두 계정과 `승우의 iPhone`에서 재검증
+5. 시뮬레이터 DEBUG 계정으로 Heart·Signal·Parcel 화면 반복 검증
+6. Letter·Parcel·Delivery·Archive 서버 흐름 구현
+7. Widget 및 후속 Product Plan 기능 구현
 
 ## 검증 메모
 
@@ -204,4 +202,5 @@ supabase db push
 - 최신 Signal Swift 변경분은 다음 실기기 빌드에서 재검증해야 한다.
 - 최신 프로필 사진 선택·크롭·업로드 변경분도 다음 실기기 빌드에서 재검증해야 한다.
 - DEBUG 계정 흐름은 시뮬레이터 전용 검증 경로로 문서화했다.
+- 6개 Supabase migration은 원격과 일치하고 dry-run 기준 추가 적용 항목이 없다.
 - 앱 인증 토큰은 iOS Keychain을 사용하며, Keychain은 Supabase DB가 아니라 기기 내부의 보호된 인증 저장소다.
