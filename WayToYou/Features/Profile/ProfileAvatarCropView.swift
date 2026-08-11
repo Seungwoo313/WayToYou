@@ -56,7 +56,7 @@ struct ProfileAvatarCropView: View {
                     .disabled(isSaving)
                 }
             }
-            .toolbarBackground(Color(uiColor: .secondarySystemBackground), for: .navigationBar)
+            .toolbarBackground(Color.black, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
         }
