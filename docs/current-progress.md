@@ -13,15 +13,30 @@
 - 새로운 디자인 토큰 레이어는 추가하지 않는다.
 - 실시간 채팅 대신 Heart, Signal, Letter, Parcel 같은 느린 연결 경험을 만든다.
 
-## 완료된 구현
+## 상태 요약
 
-### 기반 및 정보 구조
+| 영역 | 상태 | 비고 |
+| --- | --- | --- |
+| 파일 구조·탭 정보 구조 | 완료 | 코드 반영 완료 |
+| MapKit 도시·공항 온보딩 | 완료 | 실기기 검증 완료 |
+| 화이트·블랙 UI | 완료 | 실기기 검증 완료 |
+| Heart·Keychain 인증 | 구현 완료 | 최신 실기기 재검증 대기 |
+| 연결된 Signal | 구현 완료 | 원격 DB·실기기 검증 대기 |
+| 프로필 사진 클라이언트 | 구현 완료 | 최신 실기기·상대방 표시 검증 대기 |
+| 프로필 사진 Storage | 마이그레이션 작성 완료 | 원격 DB 적용 대기 |
+| 시뮬레이터 DEBUG 계정 | 완료 | 시뮬레이터 전용 |
+| Supabase CLI | 연결 완료 | `db push` 미실행 |
+| Letter·Delivery·Widget | 미착수 | 다음 Product Plan 단계 |
+
+## 구현 완료 항목
+
+### 기반 및 정보 구조 — 완료
 
 - Swift 소스를 기능별 폴더로 정리했다.
 - Product Plan 기준으로 탭을 `홈`, `간직함`, `우리`로 재편했다.
 - Git 브랜치 `codex/product-plan-mvp`에서 작업 중이다.
 
-### MapKit 도시·공항 온보딩
+### MapKit 도시·공항 온보딩 — 완료 · 실기기 검증 완료
 
 - `RouteCity`, `RouteAirport`, `RouteEndpoint`, `CoupleRoute` 모델을 추가했다.
 - MapKit 지오코딩으로 도시를 검색한다.
@@ -39,7 +54,7 @@
 - `WayToYou/Features/Connection/RouteEndpointPicker.swift`
 - `WayToYou/Features/Connection/ConnectionOnboardingView.swift`
 
-### UI 방향
+### UI 방향 — 완료 · 실기기 검증 완료
 
 - 전역 `Palette`를 블랙·화이트·중성 그레이로 변경했다.
 - 기존 별빛/성운 배경의 푸른 색조를 제거했다.
@@ -52,7 +67,7 @@
 - `24e5d2d feat: add MapKit route onboarding`
 - `d4ca3af style: switch UI chrome to monochrome`
 
-### Heart / 인증 상태
+### Heart / 인증 상태 — 구현 완료 · 최신 실기기 검증 대기
 
 - Ping 명칭을 Heart 중심 상호작용으로 정리했다.
 - realtime-style Heart burst 오버레이와 액션 흐름을 추가했다.
@@ -68,7 +83,7 @@
 - `2090df8 fix: reject stale Keychain auth sessions`
 - `67c9644 style: simplify Heart action controls`
 
-### Signal
+### Signal — 구현 완료 · 원격 DB·실기기 검증 대기
 
 - 연결된 상대에게 보이는 현재 상태 Signal 흐름을 추가했다.
 - Signal 보내기·목록 조회를 Supabase security-definer RPC 경계로 연결했다.
@@ -79,7 +94,7 @@
 
 - `17d996c feat: add connected Signal states`
 
-### 프로필 사진 보안 저장소
+### 프로필 사진 보안 저장소 — 마이그레이션 작성 완료 · 원격 적용 대기
 
 - 비공개 Supabase Storage bucket 마이그레이션을 추가했다.
 - 사진은 소유자와 현재 연결된 상대만 읽을 수 있도록 Storage 정책을 정의했다.
@@ -90,7 +105,7 @@
 
 - `20d9c17 feat: add secure profile photo storage`
 
-### 프로필 사진 클라이언트 흐름
+### 프로필 사진 클라이언트 흐름 — 구현 완료 · 실기기 검증 대기
 
 - 사진 라이브러리와 카메라에서 프로필 사진을 선택할 수 있다.
 - 고정 마스크 안에서 사진을 확대·이동해 크롭할 수 있다.
@@ -114,7 +129,7 @@
 - `65f3166 style: use black avatar crop navigation`
 - `58bb2e5 feat: add animated avatar success toast`
 
-### 시뮬레이터 DEBUG 계정
+### 시뮬레이터 DEBUG 계정 — 완료 · 시뮬레이터 전용
 
 - Supabase 로그인과 온보딩 없이 연결된 화면으로 진입할 수 있는 시뮬레이터 전용 계정을 추가했다.
 - `mina`는 서울·인천공항, `sofia`는 Paris·CDG fixture를 사용한다.
@@ -131,7 +146,7 @@
 
 - `b83b277 feat: add simulator debug accounts`
 
-## Supabase 상태
+## Supabase 상태 — CLI 연결 완료 · 원격 DB 적용 대기
 
 - Supabase Swift SDK와 앱 API 연결은 기존 설정으로 구성되어 있다.
 - Supabase CLI를 설치하고 `supabase init`을 실행했다.
@@ -150,7 +165,7 @@
 - `supabase/migrations/20260811193000_profile_photos.sql`
 - `WayToYou/Services/SupabaseConnectionService.swift`
 
-### 아직 하지 않은 것
+### 아직 하지 않은 것 — 대기
 
 - `supabase db push`는 아직 실행하지 않았다.
 - 원격 DB의 실제 마이그레이션 적용 상태는 아직 확인하지 않았다.
@@ -169,7 +184,7 @@ supabase db push
 
 `migration list`에서 기존 원격 이력과 로컬 파일이 어긋나면 `migration repair`를 바로 실행하지 말고 원인을 먼저 확인한다.
 
-## 다음 작업 순서
+## 다음 작업 순서 — 대기 및 미착수
 
 1. 다른 작업공간에서 Supabase 마이그레이션 상태 확인 및 필요 시 적용
 2. 원격 DB 적용 후 프로필 저장·복원 end-to-end 검증
