@@ -18,6 +18,7 @@ final class WayToYouStore {
     private(set) var connectionIsWorking = false
     private(set) var connectionMessage: String?
     private(set) var heartMessage: String?
+    private(set) var signalMessage: String?
 
     /// 서버가 없는 동안 상대 쪽 반응을 흉내 낸다.
     /// 배송 시간도 압축돼서 전체 루프를 몇 분 안에 볼 수 있다.
@@ -50,6 +51,7 @@ final class WayToYouStore {
     private var backendConnectionService: SupabaseConnectionService?
     private var activeUserID: UUID?
     private var hasSyncedHearts = false
+    private var hasSyncedSignals = false
 
     private enum Key {
         static let myProfile = "wty.myProfile"
@@ -67,13 +69,11 @@ final class WayToYouStore {
         static let flightDuration: TimeInterval = 100
         static let partnerOpensAfter: TimeInterval = 18
         static let replyLeavesAfter: TimeInterval = 22
-        static let signalReplyAfter: TimeInterval = 26
     }
 
     private enum Live {
         static let partnerOpensAfter: TimeInterval = 45 * 60
         static let replyLeavesAfter: TimeInterval = 3 * 60 * 60
-        static let signalReplyAfter: TimeInterval = 40 * 60
     }
 
     init(
@@ -342,10 +342,64 @@ final class WayToYouStore {
         save()
     }
 
-    func sendSignal(_ signal: CoupleSignal, now: Date = .now) {
-        signals.append(SignalEvent(signal: signal, direction: .outgoing, sentAt: now))
-        trimSignals()
-        save()
+    @discardableResult
+    func sendSignal(_ signal: CoupleSignal) async -> Bool {
+        guard isConnected, let backendConnectionService, let activeUserID else { return false }
+
+        signalMessage = nil
+
+        do {
+            let remote = try await backendConnectionService.sendSignal(signal)
+            let event = SignalEvent(
+                id: remote.id,
+                signal: remote.signal,
+                direction: remote.senderID == activeUserID ? .outgoing : .incoming,
+                sentAt: remote.sentAt
+            )
+            if !signals.contains(where: { $0.id == event.id }) {
+                signals.append(event)
+                trimSignals()
+                save()
+            }
+            return true
+        } catch {
+            signalMessage = Self.friendlySignalError(error)
+            return false
+        }
+    }
+
+    /// 앱이 활성화된 동안 두 사람의 최근 상태를 동기화한다.
+    /// 최초 동기화는 과거 알림을 울리지 않고, 이후 새로 온 상태만 반환한다.
+    @discardableResult
+    func refreshSignals() async -> [SignalEvent] {
+        guard isConnected, let backendConnectionService, let activeUserID else { return [] }
+
+        do {
+            let previousIDs = Set(signals.map(\.id))
+            let remote = try await backendConnectionService.listSignals()
+            let fetched = remote.map { event in
+                SignalEvent(
+                    id: event.id,
+                    signal: event.signal,
+                    direction: event.senderID == activeUserID ? .outgoing : .incoming,
+                    sentAt: event.sentAt
+                )
+            }
+            let receivedSignals = hasSyncedSignals ? fetched.filter {
+                $0.direction == .incoming && !previousIDs.contains($0.id)
+            } : []
+            signals = fetched
+            hasSyncedSignals = true
+            trimSignals()
+            save()
+            return receivedSignals
+        } catch {
+            return []
+        }
+    }
+
+    func clearSignalMessage() {
+        signalMessage = nil
     }
 
     @discardableResult
@@ -427,7 +481,6 @@ final class WayToYouStore {
 
         let opensAfter = demoMode ? Demo.partnerOpensAfter : Live.partnerOpensAfter
         let replyAfter = demoMode ? Demo.replyLeavesAfter : Live.replyLeavesAfter
-        let signalAfter = demoMode ? Demo.signalReplyAfter : Live.signalReplyAfter
 
         // 1. 상대가 내 소포를 열어본다.
         for index in parcels.indices
@@ -454,23 +507,6 @@ final class WayToYouStore {
             changed = true
         }
 
-        // 3. 내가 보낸 시그널에 상대가 한 번 답한다.
-        let answeredSignals = Set(signals.compactMap(\.replyToID))
-        for origin in signals where origin.direction == .outgoing && !answeredSignals.contains(origin.id) {
-            let moment = origin.sentAt.addingTimeInterval(signalAfter)
-            guard now >= moment else { continue }
-            signals.append(
-                SignalEvent(
-                    signal: Self.partnerResponse(to: origin.signal),
-                    direction: .incoming,
-                    sentAt: moment,
-                    replyToID: origin.id,
-                    isSimulated: true
-                )
-            )
-            changed = true
-        }
-
         if changed {
             trimSignals()
             save()
@@ -494,17 +530,6 @@ final class WayToYouStore {
             replyToID: origin.id,
             isSimulated: true
         )
-    }
-
-    private static func partnerResponse(to signal: CoupleSignal) -> CoupleSignal {
-        switch signal {
-        case .thinking: .missYou
-        case .missYou: .hug
-        case .busy: .cheering
-        case .resting: .resting
-        case .cheering: .hug
-        case .hug: .missYou
-        }
     }
 
     private static let replyWraps: [ParcelWrap] = [.lavender, .sage, .midnight, .coral]
@@ -597,6 +622,7 @@ final class WayToYouStore {
             from: defaults.data(forKey: storageKey(Key.heartBursts))
         ) ?? []
         hasSyncedHearts = false
+        hasSyncedSignals = false
 
         if let myProfile {
             homeCityID = myProfile.cityID
@@ -680,6 +706,20 @@ final class WayToYouStore {
             return "상대와 연결된 뒤 Heart를 보낼 수 있어요."
         }
         return "Heart를 보내지 못했어요. 잠시 후 다시 시도해주세요."
+    }
+
+    private static func friendlySignalError(_ error: Error) -> String {
+        if let postgrestError = error as? PostgrestError {
+            switch postgrestError.message {
+            case "connection_required":
+                return "상대와 연결된 뒤 Signal을 보낼 수 있어요."
+            case "invalid_signal_type":
+                return "Signal 종류를 다시 선택해주세요."
+            default:
+                break
+            }
+        }
+        return "Signal을 보내지 못했어요. 잠시 후 다시 시도해주세요."
     }
 
     private static func partnerProfile(

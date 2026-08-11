@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var pendingHeartCount = 0
     @State private var heartSequence = 0
     @State private var heartSendTask: Task<Void, Never>?
+    @State private var signalPulse = 0
     @Environment(\.scenePhase) private var scenePhase
 
     private var focus: HomeFocus { store.focus(at: now) }
@@ -45,6 +46,7 @@ struct ContentView: View {
         }
         .task(id: "\(scenePhase)-\(store.isConnected)") { await runClock() }
         .task(id: "heart-\(scenePhase)-\(store.isConnected)") { await syncHeartBursts() }
+        .task(id: "signal-\(scenePhase)-\(store.isConnected)") { await syncSignals() }
         .sheet(item: $route.presented) { destination in
             sheet(for: destination)
         }
@@ -52,6 +54,11 @@ struct ContentView: View {
             Button("확인", role: .cancel) {}
         } message: {
             Text(store.heartMessage ?? "잠시 후 다시 시도해주세요.")
+        }
+        .alert("Signal을 보내지 못했어요", isPresented: signalMessageBinding) {
+            Button("확인", role: .cancel) {}
+        } message: {
+            Text(store.signalMessage ?? "잠시 후 다시 시도해주세요.")
         }
         #if DEBUG
         // 스크린샷용. `simctl launch ... -previewSheet compose`처럼 띄운다.
@@ -117,23 +124,38 @@ struct ContentView: View {
                     .padding(.top, Metric.s)
                     .padding(.bottom, Metric.m)
 
-                ZStack(alignment: .bottom) {
+                ZStack {
                     GlobeMapView(
                         homeCity: store.homeCity,
                         partnerCity: store.partnerCity
                     )
 
+                    if let partnerSignal = store.latestSignal(.incoming, at: now) {
+                        PartnerSignalPill(
+                            event: partnerSignal,
+                            partnerName: store.partnerProfile?.displayName ?? "상대",
+                            now: now,
+                            pulse: signalPulse
+                        )
+                        .padding(.top, Metric.m)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+
                     Actions(
                         focus: focus,
                         heartPulse: heartSequence,
+                        currentSignal: store.latestSignal(.outgoing, at: now)?.signal,
                         onHeart: queueHeart,
                         onPrimary: primaryAction,
                         onSignal: { route = .signal }
                     )
                     .padding(.horizontal, Metric.screenPadding)
                     .padding(.bottom, Metric.s)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
                 }
                 .clipped()
+                .animation(.spring(response: 0.42, dampingFraction: 0.82), value: store.latestSignal(.incoming, at: now)?.id)
             }
             .overlay(alignment: .bottom) {
                 Color.black.frame(height: 1)
@@ -150,12 +172,14 @@ struct ContentView: View {
     private func sheet(for destination: SheetRoute.Destination) -> some View {
         switch destination {
         case .signal:
-            SignalPickerSheet { signal in
-                store.sendSignal(signal)
+            SignalPickerSheet(
+                selectedSignal: store.latestSignal(.outgoing, at: now)?.signal
+            ) { signal in
                 route = .none
                 UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                Task { _ = await store.sendSignal(signal) }
             }
-            .presentationDetents([.height(400)])
+            .presentationDetents([.height(270), .medium])
             .presentationDragIndicator(.visible)
 
         case .compose:
@@ -245,6 +269,19 @@ struct ContentView: View {
         }
     }
 
+    private func syncSignals() async {
+        guard scenePhase == .active, store.isConnected else { return }
+
+        while !Task.isCancelled {
+            let received = await store.refreshSignals()
+            if !received.isEmpty {
+                signalPulse += 1
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            }
+            try? await Task.sleep(for: .seconds(4))
+        }
+    }
+
     private func emitHeart(incoming: Bool) {
         heartSequence += 1
         let particle = HeartParticle.make(sequence: heartSequence, incoming: incoming)
@@ -260,6 +297,13 @@ struct ContentView: View {
         Binding(
             get: { store.heartMessage != nil },
             set: { if !$0 { store.clearHeartMessage() } }
+        )
+    }
+
+    private var signalMessageBinding: Binding<Bool> {
+        Binding(
+            get: { store.signalMessage != nil },
+            set: { if !$0 { store.clearSignalMessage() } }
         )
     }
 
@@ -335,109 +379,35 @@ private struct ClockRow: View {
     }
 }
 
-// MARK: - Status
+// MARK: - Signal status
 
-/// 홈 중앙에 보여주는 현재 상태.
-private struct StatusLine: View {
-    let focus: HomeFocus
-    let store: WayToYouStore
+private struct PartnerSignalPill: View {
+    let event: SignalEvent
+    let partnerName: String
     let now: Date
+    let pulse: Int
 
     var body: some View {
-        VStack(spacing: Metric.s) {
-            switch focus {
-            case .quiet:
-                quiet
-            case .outgoingFlight(let parcel), .incomingFlight(let parcel):
-                flight(parcel)
-            case .readyToOpen(let parcel):
-                headline("소포가 도착했어요", detail: "\(parcel.fromCity.name)에서 · \(parcel.arrivesAt.koreanRelative(to: now))")
-            case .partnerRead(let parcel):
-                headline(
-                    "\(parcel.toCity.name)에서 편지를 읽었어요",
-                    detail: "“\(parcel.title)” · \((parcel.openedAt ?? parcel.arrivesAt).koreanRelative(to: now))"
-                )
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .multilineTextAlignment(.center)
-        .softSpring(focus)
-    }
-
-    @ViewBuilder
-    private var quiet: some View {
-        if let theirs = store.latestSignal(.incoming, at: now) {
-            headline(
-                theirs.signal.partnerCaption,
-                detail: "\(store.partnerCity.name) · \(theirs.sentAt.koreanRelative(to: now))"
-            )
-        } else if let mine = store.latestSignal(.outgoing, at: now) {
-            headline(
-                "‘\(mine.signal.title)’를 보내뒀어요",
-                detail: "\(store.partnerCity.name)에 닿아 있어요 · \(mine.sentAt.koreanRelative(to: now))"
-            )
-        } else {
-            // 상단 시계에서 뺀 거리·시차를 여기서 되돌려준다. 늘 붙어 있으면 잡음이지만
-            // 아무 일도 없을 때는 이게 유일하게 말할 거리다.
-            headline(
-                "아직 조용해요",
-                detail: "\(store.distanceKilometers.grouped)km · \(store.timeDifferenceCaption(at: now))"
-            )
-        }
-    }
-
-    private func flight(_ parcel: Parcel) -> some View {
-        let isMine = parcel.direction == .outgoing
-        let remaining = max(parcel.arrivesAt.timeIntervalSince(now), 0)
-        return VStack(spacing: Metric.m) {
-            VStack(spacing: 3) {
-                Text("\(parcel.toCity.name)까지 \(remaining.shortKoreanDuration)")
-                    .font(.system(.title2, design: .rounded).weight(.semibold))
-                    .foregroundStyle(Palette.textPrimary)
-                Text(isMine ? "내 소포 · “\(parcel.title)”" : "\(parcel.fromCity.name)에서 오는 중")
-                    .font(.rounded(.footnote))
-                    .foregroundStyle(Palette.textSecondary)
-                    .lineLimit(1)
-            }
-
-            ProgressHairline(progress: parcel.progress(at: now), tint: Palette.tint(for: parcel.direction))
-        }
-    }
-
-    private func headline(_ title: String, detail: String?) -> some View {
-        VStack(spacing: 3) {
-            Text(title)
-                .font(.system(.title2, design: .rounded).weight(.semibold))
+        HStack(spacing: Metric.m) {
+            Image(systemName: event.signal.symbol)
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Palette.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-            if let detail {
-                Text(detail)
-                    .font(.rounded(.footnote))
+                .symbolEffect(.bounce, value: pulse)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(event.signal.partnerCaption)
+                    .font(.rounded(.footnote, .semibold))
+                    .foregroundStyle(Palette.textPrimary)
+                Text("\(partnerName) · \(event.sentAt.koreanRelative(to: now))")
+                    .font(.rounded(.caption2))
                     .foregroundStyle(Palette.textSecondary)
-                    .lineLimit(1)
             }
         }
-    }
-}
-
-/// 2pt 짜리 진행선. ProgressView의 기본 트랙은 이 화면에서 너무 두껍고 밝다.
-private struct ProgressHairline: View {
-    let progress: Double
-    let tint: Color
-
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.10))
-                Capsule()
-                    .fill(tint)
-                    .frame(width: max(geometry.size.width * progress, 2))
-            }
-        }
-        .frame(height: 2)
-        .frame(maxWidth: 190)
-        .animation(.linear(duration: 0.9), value: progress)
-        .accessibilityHidden(true)
+        .padding(.horizontal, Metric.l)
+        .frame(height: 52)
+        .glassEffect(.regular, in: Capsule())
+        .overlay { Capsule().strokeBorder(Palette.hairline, lineWidth: 0.5) }
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -447,6 +417,7 @@ private struct ProgressHairline: View {
 private struct Actions: View {
     let focus: HomeFocus
     let heartPulse: Int
+    let currentSignal: CoupleSignal?
     let onHeart: () -> Void
     let onPrimary: () -> Void
     let onSignal: () -> Void
@@ -478,14 +449,15 @@ private struct Actions: View {
             .accessibilityHint("연속으로 누르면 누른 횟수만큼 상대에게 전달됩니다")
 
             Button(action: onSignal) {
-                Image(systemName: "antenna.radiowaves.left.and.right")
+                Image(systemName: currentSignal?.symbol ?? "antenna.radiowaves.left.and.right")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Palette.textPrimary)
                     .frame(width: 52, height: 44)
+                    .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.capsule)
-            .accessibilityLabel("시그널 보내기")
+            .accessibilityLabel(currentSignal.map { "내 Signal \($0.title). Signal 바꾸기" } ?? "Signal 보내기")
 
             Button(action: onPrimary) {
                 Image(systemName: isArrived ? "shippingbox.fill" : "shippingbox")

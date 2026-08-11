@@ -44,69 +44,50 @@ struct CoupleCity: Identifiable, Hashable, Codable {
 // MARK: - Signal
 
 enum CoupleSignal: String, CaseIterable, Identifiable, Codable {
-    case thinking
-    case missYou
-    case busy
+    case sleeping
+    case focusing
+    case free
+    case out
     case resting
-    case cheering
-    case hug
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .thinking: "생각 중"
-        case .missYou: "보고 싶어"
-        case .busy: "조금 바빠"
+        case .sleeping: "자는 중"
+        case .focusing: "집중 중"
+        case .free: "여유 있어"
+        case .out: "외출 중"
         case .resting: "쉬는 중"
-        case .cheering: "응원해"
-        case .hug: "안아줄게"
         }
     }
 
-    /// 상대 비콘 아래에 붙는, 한 사람이 다른 사람에게 읽히는 문장.
     var partnerCaption: String {
         switch self {
-        case .thinking: "네 생각을 하고 있대요"
-        case .missYou: "보고 싶어 하고 있어요"
-        case .busy: "지금은 조금 바쁘대요"
-        case .resting: "잠깐 쉬고 있어요"
-        case .cheering: "너를 응원하고 있어요"
-        case .hug: "안아주고 싶대요"
+        case .sleeping: "지금 자고 있어요"
+        case .focusing: "무언가에 집중하고 있어요"
+        case .free: "잠깐 여유가 있어요"
+        case .out: "밖에 나와 있어요"
+        case .resting: "편하게 쉬고 있어요"
         }
     }
 
     var symbol: String {
         switch self {
-        case .thinking: "cloud.fill"
-        case .missYou: "moon.stars.fill"
-        case .busy: "bolt.fill"
-        case .resting: "cup.and.heat.waves.fill"
-        case .cheering: "sparkles"
-        case .hug: "heart.fill"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .thinking: Color(red: 0.72, green: 0.80, blue: 0.92)
-        case .missYou: Color(red: 0.78, green: 0.70, blue: 1.00)
-        case .busy: Color(red: 1.00, green: 0.78, blue: 0.43)
-        case .resting: Color(red: 0.62, green: 0.86, blue: 0.82)
-        case .cheering: Color(red: 0.76, green: 0.91, blue: 0.55)
-        case .hug: Color(red: 1.00, green: 0.58, blue: 0.62)
+        case .sleeping: "moon.zzz.fill"
+        case .focusing: "laptopcomputer"
+        case .free: "cup.and.saucer.fill"
+        case .out: "figure.walk"
+        case .resting: "house.fill"
         }
     }
 }
 
 struct SignalEvent: Identifiable, Codable, Hashable {
-    var id = UUID()
-    var signal: CoupleSignal
-    var direction: ParcelDirection
-    var sentAt: Date
-    /// 데모 모드에서 내 시그널에 대한 응답으로 만들어진 경우 원본 id.
-    var replyToID: UUID?
-    var isSimulated = false
+    let id: UUID
+    let signal: CoupleSignal
+    let direction: ParcelDirection
+    let sentAt: Date
 
     /// 시그널은 "지금의 마음"이라 하루가 지나면 흐려진다.
     func isFresh(at date: Date) -> Bool {

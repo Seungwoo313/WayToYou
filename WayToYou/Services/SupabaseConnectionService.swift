@@ -76,6 +76,20 @@ struct RemoteHeartBurst: Decodable {
     }
 }
 
+struct RemoteSignalEvent: Decodable {
+    let id: UUID
+    let senderID: UUID
+    let signal: CoupleSignal
+    let sentAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case senderID = "sender_id"
+        case signal = "signal_type"
+        case sentAt = "sent_at"
+    }
+}
+
 struct SupabaseConnectionService {
     private let client: SupabaseClient
 
@@ -143,6 +157,22 @@ struct SupabaseConnectionService {
         struct Parameters: Encodable { let p_limit: Int }
         return try await client
             .rpc("wty_list_heart_bursts", params: Parameters(p_limit: limit))
+            .execute()
+            .value
+    }
+
+    func sendSignal(_ signal: CoupleSignal) async throws -> RemoteSignalEvent {
+        struct Parameters: Encodable { let p_signal_type: String }
+        return try await client
+            .rpc("wty_send_signal", params: Parameters(p_signal_type: signal.rawValue))
+            .execute()
+            .value
+    }
+
+    func listSignals(limit: Int = 80) async throws -> [RemoteSignalEvent] {
+        struct Parameters: Encodable { let p_limit: Int }
+        return try await client
+            .rpc("wty_list_signals", params: Parameters(p_limit: limit))
             .execute()
             .value
     }

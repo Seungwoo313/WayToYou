@@ -203,7 +203,7 @@ struct KeepsakesView: View {
         let tint = Palette.tint(for: event.direction)
         return HStack(spacing: Metric.m) {
             Circle()
-                .fill(event.signal.color)
+                .fill(Palette.textSecondary)
                 .frame(width: 6, height: 6)
                 .padding(.leading, 13)
 
