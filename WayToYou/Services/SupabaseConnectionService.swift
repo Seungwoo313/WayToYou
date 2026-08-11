@@ -100,6 +100,31 @@ struct RemoteSignalEvent: Decodable {
     }
 }
 
+struct RemoteDevicePresence: Decodable {
+    let batteryLevel: Int
+    let batteryState: DeviceBatteryState
+    let updatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case batteryLevel = "battery_level"
+        case batteryState = "battery_state"
+        case updatedAt = "updated_at"
+    }
+
+    var presence: DevicePresence {
+        DevicePresence(
+            batteryLevel: batteryLevel,
+            batteryState: batteryState,
+            updatedAt: updatedAt
+        )
+    }
+}
+
+/// 상대가 아직 배터리를 올리지 않았으면 서버가 `presence: null`을 돌려준다.
+private struct RemotePartnerPresence: Decodable {
+    let presence: RemoteDevicePresence?
+}
+
 struct SupabaseConnectionService {
     private static let profilePhotoBucket = "wty-profile-photos"
 
@@ -187,6 +212,40 @@ struct SupabaseConnectionService {
             .rpc("wty_list_signals", params: Parameters(p_limit: limit))
             .execute()
             .value
+    }
+
+    func setDevicePresence(
+        batteryLevel: Int,
+        batteryState: DeviceBatteryState
+    ) async throws -> RemoteDevicePresence {
+        struct Parameters: Encodable {
+            let p_battery_level: Int
+            let p_battery_state: String
+        }
+        return try await client
+            .rpc(
+                "wty_set_device_presence",
+                params: Parameters(
+                    p_battery_level: batteryLevel,
+                    p_battery_state: batteryState.rawValue
+                )
+            )
+            .execute()
+            .value
+    }
+
+    func partnerDevicePresence() async throws -> RemoteDevicePresence? {
+        let remote: RemotePartnerPresence = try await client
+            .rpc("wty_get_partner_presence")
+            .execute()
+            .value
+        return remote.presence
+    }
+
+    func clearDevicePresence() async throws {
+        _ = try await client
+            .rpc("wty_clear_device_presence")
+            .execute()
     }
 
     func uploadProfileAvatar(data: Data, userID: UUID) async throws -> UserProfile {

@@ -1,50 +1,53 @@
 # Way to You — 다음 채팅 인수인계
 
-작성일: 2026-08-11
+작성일: 2026-08-12
 
 작업 폴더: `/Users/seungwoo/Desktop/WayToYou`
 
 브랜치: `codex/product-plan-mvp`
 
-문서 작성 시작 기준 HEAD: `ba6b9b6 feat: add city profile markers`
+Device Presence 구현 직전 기준 HEAD: `8367f0a feat: refine globe signal markers and notifications`
 
 이 문서는 다음 채팅에서 현재 작업을 다시 조사하지 않고 곧바로 이어가기 위한 기준 문서다. 다음 작업을 시작할 때 이 문서와 `git status`, 최근 `git log`를 먼저 확인한다.
 
 ## 1. 지금 바로 이어서 할 일
 
-도시 중심 프로필 마커는 `ba6b9b6 feat: add city profile markers`에서 완료됐다. 다음 구현은 **프로필 마커를 탭했을 때 이름과 도시/국가만 보여주는 작은 정보 UI**다.
+> **2026-08-12 업데이트**: Device Presence 구현과 문서가 현재 배터리 기능 커밋에 포함됐고, `20260811223000_device_presence.sql`은 원격 DB에 적용됐다. local/remote migration 7개가 일치하며 dry-run도 최신 상태다. iPhone 17 fixture UI와 두 실기기 빌드·설치·실행을 완료했고, 두 앱 실행 뒤 원격 presence 행 2개로 실제 publish를 확인했다. 공개 API의 배터리 수치가 상태바보다 거칠 수 있어 마커에는 퍼센트를 쓰지 않고 작은 배터리 아이콘만 표시한다. 숫자 제거 최종본도 두 실기기에 다시 설치·실행했다.
+> 남은 Device Presence 작업은 충전 연결·해제, 10분 stale·60분 expired, unknown, 상대 화면의 값 소유자를 통제된 조건에서 확인하는 수동 QA다. clear RPC와 store 경로는 있지만 사용자가 공유를 끄는 설정 UI는 아직 없다.
 
-다음 단계에서는 다른 기능을 섞지 말고 아래 범위까지만 구현한다.
+도시 중심 프로필 마커, 탭 선택 애니메이션·햅틱, Signal 스티커, 신규 Signal 수신 토스트까지 `8367f0a`에서 완료됐다. 큰 정보 카드와 도시/시간 pill은 시각 검토 후 제거했으므로 복원하지 않는다.
 
-1. 내 마커와 상대 마커를 탭할 수 있게 한다.
-2. 선택된 마커 가까이에 이름과 도시/국가만 간결하게 표시한다.
-3. 일반적인 MapKit callout을 쓸지, 현재 흑백 UI에 맞는 작은 custom overlay를 쓸지 기존 홈 레이아웃과 실제 기기 화면을 보고 결정한다.
-4. 지구본 팬·핀치·회전·기울기와 충돌하지 않게 한다.
-5. 빈 공간을 탭하거나 다른 마커를 선택했을 때 자연스럽게 닫히거나 전환돼야 한다.
-6. 선택 상태 변경은 카메라를 초기화하지 않아야 한다.
-7. Route 선, 비행 중 소포, 공항 선택은 이 커밋에 넣지 않는다.
+다음 작업은 Device Presence 수동 QA를 마무리한 뒤 **두 도시를 잇는 절제된 Route 선**을 독립적으로 구현하는 것이다. 배터리 변경과 Route를 같은 커밋에 섞지 않는다.
 
-첫 커밋의 권장 단위는 `feat: add profile marker details`다.
-
-### 예상 수정 지점
+### Device Presence 구현 지점
 
 - `WayToYou/Features/Home/GlobeMapView.swift`
-  - annotation 선택 이벤트 처리
-  - 선택된 마커 정보 UI 표시와 해제
-- 필요하면 `WayToYou/App/ContentView.swift`
-  - SwiftUI overlay가 더 적합할 때만 최소 상태 연결
+  - 현재 선택 애니메이션·햅틱·Signal 스티커 유지
+- `WayToYou/Core/Models/ConnectionModels.swift`
+  - Device Presence 값 타입과 freshness 표현
+- `WayToYou/Services/SupabaseConnectionService.swift`
+  - set/get/clear RPC
+- `WayToYou/Core/State/WayToYouStore.swift`
+  - 사용자별 transient presence와 publish/refresh
+- 새 `WayToYou/Services/DeviceBatteryMonitor.swift`
+  - foreground·연결 상태 동안만 UIDevice 배터리 관찰
+- `WayToYou/App/ContentView.swift`
+  - monitor 생명주기와 선택 UI 연결
+- `supabase/migrations/`
+  - partner-only Device Presence migration
 
-### 다음 단계 완료 조건
+### Device Presence 남은 완료 조건
 
-- 두 마커를 각각 탭하면 올바른 이름과 도시/국가가 보인다.
-- 지도 제스처가 기존처럼 자연스럽고 선택 상태가 카메라를 바꾸지 않는다.
-- 정보 UI가 상단 시간, 하단 액션과 탭 바를 침범하지 않는다.
-- iPhone 17 시뮬레이터 DEBUG 계정 검증 후 `승우의 iPhone`에서 빌드·설치·실행한다.
-- 변경분을 확인하고 작은 단위로 커밋한다.
+- 현재 연결 상대 외에는 Device Presence를 읽을 수 없다. anon RPC·직접 SELECT 거부는 확인 완료했다.
+- 배터리 unknown과 오래된 값이 실시간 수치처럼 표시되지 않는다.
+- 상태 갱신이나 마커 선택이 카메라를 바꾸거나 선택 애니메이션을 재실행하지 않는다.
+- iPhone 17 시뮬레이터에서는 unknown/fixture UI만 검증하고, 배터리·햅틱은 두 실기기에서 확인한다.
+- 두 실기기 빌드·설치·실행과 양쪽 publish는 확인 완료했다. 상대 read와 충전 상태 전환을 화면에서 확인한다.
+- migration, 데이터 흐름, UI를 필요하면 분리 커밋한다.
 
 ## 2. 최신 제품 결정 — 기존 Product Plan보다 우선
 
-기존 `docs/way-to-you-plan-v2.md`는 온보딩과 지구본에서 공항을 중심으로 설명하지만, 대화에서 아래 방향으로 변경됐다. 아직 모델·UI·Product Plan 문서에는 완전히 반영되지 않았다.
+`docs/way-to-you-plan-v2.md`의 온보딩·Signal·Globe 핵심 문구는 2026-08-12에 아래 방향으로 갱신했다. 구현 모델 전체가 아직 분리된 것은 아니므로 충돌이 있으면 이 인수인계의 결정이 우선한다.
 
 - 프로필의 위치는 **공항이 아니라 도시**다.
 - 프로필 마커는 사용자가 고른 도시의 대표 중심 좌표에 둔다.
@@ -111,12 +114,13 @@
 | MapKit 도시·공항 검색 | 구현 완료 | 최신 결정에 맞춰 도시/공항 책임 분리 필요 |
 | 흑백·중성 UI | 반영 완료 | 새 화면에서도 방향 유지 |
 | Heart Burst | 클라이언트·RPC 구현 완료 | 두 실제 계정 수신 애니메이션 E2E 확인 |
-| Signal | 클라이언트·RPC 구현 완료 | 두 실제 계정 송수신·만료 E2E 확인 |
+| Signal | RPC·선택 UI·신규 수신 토스트·마커 스티커 구현 완료 | 두 실제 계정 양방향 송수신·만료 E2E 확인 |
 | 프로필 사진 선택·크롭·기본 이미지 | 구현 완료 | 최신 실기기 UI와 카메라 재확인 |
 | 비공개 프로필 사진 Storage/RLS | 원격 적용 완료 | 실제 연결 상대 다운로드 권한 E2E 확인 |
 | 프로필 성공 토스트 | 구현 완료 | 실기기 시각·VoiceOver 확인 |
 | DEBUG 시뮬레이터 계정 | 완료 | 서버 실시간 동기화는 의도적으로 없음 |
-| MapKit 지구본 | 위성 지구본·동적 카메라·도시 프로필 마커 완료 | 마커 탭 정보 UI가 바로 다음 작업 |
+| MapKit 지구본 | 위성 지구본·동적 카메라·도시 프로필 마커·선택 애니메이션·Signal 스티커·마커 배터리 바 완료 | Route 선이 다음 독립 작업 |
+| Device Presence·배터리 | 원격 migration·RPC·monitor·store·배터리 바 적용 완료 | 두 실기기 publish 확인, 충전 전환·freshness 화면 QA 남음 |
 | Parcel/Letter/Keepsakes | 로컬 데모 흐름 존재 | 서버 저장·상대 전송·공항 선택·제품 UX 구현 필요 |
 | Polaroid·Voice Tape | 미착수 | Product Plan 후속 단계 |
 | Widget | 미착수 | Signal/Heart App Intent 포함 설계 필요 |
@@ -149,8 +153,13 @@
 - 카메라 경계는 투영 붕괴 방지를 위해 위도 **±70°**다.
 - 두 사람의 프로필은 공항이 아닌 각 도시의 `latitude/longitude`에 표시한다.
 - 마커는 작은 흰 점, 짧은 선, 46pt 원형 사진으로 구성하며 사진이 없으면 기존 이니셜 fallback을 공유한다.
-- 사진·이름 변경은 annotation만 동기화하고 현재 카메라와 사용자 조작 상태는 유지한다.
-- 최초 카메라를 확정한 다음 메인 루프에서 annotation을 추가한다. 순서가 반대면 MapKit이 첫 제스처 전까지 마커 가시성 재계산을 미루는 현상이 있었다.
+- 사진·이름·Signal 변경은 annotation만 동기화하고 현재 카메라와 사용자 조작 상태는 유지한다.
+- 최초 순서는 `connect → requestInitialFraming → sync(latestMarkers 저장)`이다. layout 후 카메라를 확정하고 `CADisplayLink` 두 프레임 뒤 annotation을 한 번 적용한다.
+- 이 순서를 바꾸거나 카메라 commit 중 annotation을 추가하면 손을 대기 전 마커가 보이지 않고 첫 pan에서 나타나는 현상이 반복됐다. 현재 두 실기기에서 확인된 순서를 가볍게 리팩터링하지 않는다.
+- 마커를 탭하면 해당 사진만 짧은 spring/halo 애니메이션과 selection 햅틱을 재생한다. 빈 지도 선택 해제와 실제 지도 제스처 시작 시 선택을 닫으며 카메라는 바꾸지 않는다.
+- 큰 프로필 정보 카드와 도시/시간 pill은 제거된 상태다. `GlobeMarkerSelection.anchor`는 남아 있지만 현재 SwiftUI overlay에는 사용하지 않는다.
+- 각 마커는 최신 Signal이 있으면 컬러 유니코드 이모지를 왼쪽 아래에 표시한다. 원 배경 대신 실제 이모지 알파 외곽을 따라 1.5pt 흰 테두리를 만든다.
+- `EmojiStickerRenderer.image(for:pointSize:outlineWidth:)`는 어떤 유니코드 이모지든 기본 15pt로 렌더링하고 결과를 캐시한다. 이모지별 크기 보정은 하지 않는다.
 - 초기 카메라는 수동으로 잡은 좌표나 거리를 하드코딩하지 않는다. 두 도시의 구면 중점, 실제 하단 UI 여백 비율, 최대 축소 상태를 이용해 계산한다.
 - 위도 보정을 적용하되, 준대척 도시 조합에서도 어느 도시도 지구 뒤로 넘어가지 않도록 구면 지평선 여유로 이동량을 제한한다.
 - Route line은 아직 없다.
@@ -167,6 +176,9 @@
 - Heart는 탭마다 즉시 로컬 하트와 햅틱을 재생하고 짧게 모은 수량을 하나의 서버 Burst로 전송한다.
 - 새로 받은 Burst만 원래 개수대로 재생하며 별도 수신 문구를 표시하지 않는다.
 - Signal은 사용자가 선택한 상태를 서버에 보내고 앱이 활성화된 동안 최근 상태를 가볍게 동기화한다.
+- Signal 선택 화면과 홈 액션은 SF Symbol 대신 컬러 유니코드 이모지를 사용한다.
+- 기존의 지속적인 상단 상태 pill은 제거했다. 최초 동기화 이후 새 incoming Signal만 `☕️ 상대 · N분 전` 형태의 38pt 토스트로 약 3초 표시하고 과거 이벤트는 앱 시작 시 재생하지 않는다.
+- 내 마커에는 최신 outgoing Signal, 상대 마커에는 최신 incoming Signal을 표시한다. Signal 갱신은 camera route key에 포함하지 않는다.
 - 두 기능 모두 security-definer RPC 경계를 통해 현재 연결된 상대와만 주고받도록 DB가 구성돼 있다.
 
 주요 파일:
@@ -195,7 +207,7 @@
 - `간직함`은 로컬 Parcel과 Signal 기록을 날짜별로 보여준다.
 - 따라서 UI 골격은 있지만 실제 상대 전송 기능이 완료된 것으로 보면 안 된다.
 
-## 6. Supabase 상태 — 2026-08-11 직접 확인
+## 6. Supabase 상태 — 2026-08-12 직접 확인
 
 Supabase CLI는 프로젝트에 연결돼 있고 로그인도 되어 있다. 문서 작성 중 아래 읽기 전용 명령으로 원격 상태를 다시 확인했다.
 
@@ -206,9 +218,13 @@ supabase db push --dry-run
 
 확인 결과:
 
-- 아래 6개 migration은 local/remote version이 모두 일치한다.
+- 아래 7개 migration은 local/remote version이 모두 일치한다.
 - `db push --dry-run` 결과는 `Remote database is up to date.`다.
 - 현재 추가로 push할 migration은 없다.
+- Device Presence 적용 뒤 원격 테이블과 primary/connection index를 확인했다.
+- linked DB lint 결과는 `No schema errors found`다.
+- 두 실기기 실행 뒤 원격 presence 예상 행 수가 2개여서 양쪽 실제 계정의 publish를 확인했다.
+- anon role의 partner RPC·clear RPC·테이블 직접 SELECT는 모두 HTTP 401로 거부됐다.
 
 적용된 migration:
 
@@ -218,6 +234,7 @@ supabase db push --dry-run
 - `20260811180500_reset_test_users.sql`
 - `20260811190000_signals.sql`
 - `20260811193000_profile_photos.sql`
+- `20260811223000_device_presence.sql`
 
 주의사항:
 
@@ -268,7 +285,7 @@ xcrun simctl launch --terminate-running-process booted \
 - 실기기 UUID: `06D7A8DA-E136-59E0-84EA-33DB46085EEE`
 - 추가 실기기: `NXQOEKRJFJCMXM4`, iPhone 14 (`iPhone14,7`)
 - iPhone 14 UUID: `D30BD3D7-C016-5256-A4BD-95F2BA16C751`
-- 작업 완료 검증 기준은 계속 `승우의 iPhone`이며, 이번 도시 프로필 마커 빌드는 iPhone 14에도 설치·실행했다.
+- 작업 완료 검증 기준은 계속 `승우의 iPhone`이다. `8367f0a`의 마커·Signal 변경은 iPhone 14에도 반복 설치·실행했다.
 
 문서 작성 시점에 다음 Debug 시뮬레이터 빌드는 성공했다.
 
@@ -282,7 +299,7 @@ xcodebuild \
   build
 ```
 
-도시 프로필 마커 구현은 iPhone 17 시뮬레이터를 완전히 재실행한 뒤 화면을 건드리지 않은 상태에서 두 마커가 즉시 보이는 것까지 확인했다. `승우의 iPhone`과 `NXQOEKRJFJCMXM4` iPhone 14에도 같은 Debug 실기기 빌드를 설치하고 실행했다.
+도시 프로필 마커 구현은 iPhone 17 시뮬레이터를 완전히 재실행한 뒤 화면을 건드리지 않은 상태에서 두 마커가 즉시 보이는 것까지 확인했다. 흰 외곽선 유니코드 이모지 스티커도 시뮬레이터 화면에서 확인했다. `승우의 iPhone`과 `NXQOEKRJFJCMXM4` iPhone 14에는 `8367f0a`를 빌드·설치·실행했다. 단, 양방향 Signal 만료와 수신 토스트를 통제된 절차로 재검증한 것은 아니므로 E2E 완료로 적지 않는다.
 
 시뮬레이터 설치:
 
@@ -323,14 +340,16 @@ iOS 코드를 수정한 작업은 모두 끝낸 뒤 AGENTS 지침에 따라 `승
 | `5a7c8dd` | DEBUG 계정 문서화 |
 | `0c4b3fb` | 진행 상태 문서 정리 |
 | `ba6b9b6` | 도시 중심 프로필 마커와 동적 카메라 구현 |
+| `c35972f` | 프로필 마커 선택 애니메이션·햅틱 구현 |
+| `8367f0a` | 마커 초기 노출 안정화, Signal 토스트와 이모지 스티커 구현 |
 
 중간 크롭 실험 커밋(`95b9607`, `fe5becf`, `f28826b`, `76aa126`)은 최종 형태로 가는 과정이다. 현재 HEAD의 코드를 기준으로 판단한다.
 
 ## 10. 다음 구현 순서
 
-작업은 아래 순서를 권장한다. 도시 중심 프로필 마커는 완료됐으므로 첫 항목만 먼저 구현하고 검증·커밋한 뒤 다음으로 이동한다.
+작업은 아래 순서를 권장한다. Device Presence 구현을 다시 만들지 말고 남은 수동 QA만 마무리한다.
 
-1. **마커 탭 시 이름 + 도시/국가만 보여주는 작은 정보 UI**
+1. **Device Presence: 두 화면의 상대 값, 충전 연결·해제, stale/expired/unknown 수동 QA**
 2. 두 도시를 잇는 절제된 Route 선
 3. 최신 결정에 맞춰 프로필의 도시와 소포의 공항 책임 분리
 4. 소포 작성 시 출발/도착 공항을 MapKit으로 선택하는 UX
@@ -351,7 +370,7 @@ git log --oneline -12
 sed -n '1,240p' docs/next-session-handoff.md
 ```
 
-그 다음 `WayToYou/Features/Home/GlobeMapView.swift`의 annotation 선택 경로와 `ContentView.home`을 읽고 마커 정보 UI 한 단계만 구현한다.
+그 다음 `WayToYou/Features/Home/GlobeMapView.swift`의 초기 framing/annotation 순서, `ContentView`의 `presence` task, `WayToYouStore`의 연결 전환 초기화를 먼저 읽는다. Device Presence는 이미 원격 적용됐으므로 새 migration을 만들지 말고 수동 QA 결과부터 확인한다.
 
 작업 중 지켜야 할 것:
 
@@ -361,5 +380,7 @@ sed -n '1,240p' docs/next-session-handoff.md
 - 새 디자인 토큰을 만들지 않는다.
 - 공항에 사람 프로필을 두지 않는다.
 - 시뮬레이터 검증은 `mina`부터 시작한다.
+- 마커 초기 등록의 `CADisplayLink` 두 프레임 지연을 이유 없이 제거하지 않는다.
+- 이름·사진·Signal·배터리 갱신 경로에서 카메라 framing을 호출하지 않는다.
 - iOS 수정 완료 후 반드시 `승우의 iPhone`에서 실행한다.
 - 성공한 범위만 커밋하고 다음 기능과 섞지 않는다.

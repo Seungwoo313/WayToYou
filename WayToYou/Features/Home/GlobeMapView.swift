@@ -13,6 +13,43 @@ struct GlobeProfileMarker: Identifiable, Equatable {
     let city: CoupleCity
     let avatarData: Data?
     let signal: CoupleSignal?
+    let battery: GlobeBatteryDisplay?
+}
+
+/// 마커 위 배터리 바가 그릴 값. freshness를 미리 단계로 접어 넣어
+/// 시계가 매초 흘러도 단계가 바뀔 때만 marker 비교가 달라지게 한다.
+struct GlobeBatteryDisplay: Equatable {
+    let level: Int
+    let isCharging: Bool
+    /// 10분 이상 갱신이 없던 값. 흐리게 보여준다.
+    let isMuted: Bool
+
+    init(level: Int, isCharging: Bool, isMuted: Bool) {
+        self.level = level
+        self.isCharging = isCharging
+        self.isMuted = isMuted
+    }
+
+    /// 60분이 지난 값은 아예 만들지 않아 바가 사라진다.
+    init?(presence: DevicePresence?, at date: Date) {
+        guard let presence else { return nil }
+        switch presence.freshness(at: date) {
+        case .expired:
+            return nil
+        case .stale:
+            self.init(
+                level: presence.batteryLevel,
+                isCharging: presence.isCharging,
+                isMuted: true
+            )
+        case .fresh:
+            self.init(
+                level: presence.batteryLevel,
+                isCharging: presence.isCharging,
+                isMuted: false
+            )
+        }
+    }
 }
 
 struct GlobeMarkerSelection: Equatable {
@@ -507,10 +544,15 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     static let reuseIdentifier = "GlobeProfileAnnotationView"
 
     private enum Layout {
-        static let canvasSize = CGSize(width: 56, height: 68)
+        static let canvasSize = CGSize(width: 68, height: 92)
         static let avatarSize: CGFloat = 46
+        /// 배터리 바(17pt) + 여백(5pt) 아래에서 아바타가 시작한다.
+        static let avatarTop: CGFloat = 22
+        static let batteryHeight: CGFloat = 17
+        static let batteryBodySize = CGSize(width: 21, height: 10.5)
+        static let batteryCapSize = CGSize(width: 1.6, height: 4.4)
         static let dotSize: CGFloat = 6
-        static let dotOriginY: CGFloat = 60
+        static let dotOriginY: CGFloat = 84
         static let dotCenterY = dotOriginY + dotSize / 2
     }
 
@@ -522,6 +564,12 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     private let fallbackLabel = UILabel()
     private let signalBadgeView = UIView()
     private let signalBadgeImageView = UIImageView()
+    private let batteryPillView = UIView()
+    private let batteryBodyView = UIView()
+    private let batteryFillView = UIView()
+    private let batteryCapView = UIView()
+    private let batteryBoltImageView = UIImageView()
+    private var batteryDisplay: GlobeBatteryDisplay?
 
     override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
@@ -591,6 +639,41 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         signalBadgeImageView.layer.shadowRadius = 1.5
         signalBadgeImageView.layer.shadowOffset = CGSize(width: 0, height: 1)
         signalBadgeView.addSubview(signalBadgeImageView)
+
+        // iOS 상태 바 배터리를 닮은 작은 배터리 바. 아바타 바로 위에 뜬다.
+        batteryPillView.backgroundColor = UIColor.black.withAlphaComponent(0.42)
+        batteryPillView.layer.cornerRadius = Layout.batteryHeight / 2
+        batteryPillView.layer.borderColor = UIColor.white.withAlphaComponent(0.12).cgColor
+        batteryPillView.layer.borderWidth = 0.5
+        batteryPillView.isHidden = true
+        addSubview(batteryPillView)
+
+        batteryBodyView.backgroundColor = .clear
+        batteryBodyView.layer.borderColor = UIColor.white.withAlphaComponent(0.9).cgColor
+        batteryBodyView.layer.borderWidth = 1
+        batteryBodyView.layer.cornerRadius = 3
+        batteryPillView.addSubview(batteryBodyView)
+
+        batteryFillView.layer.cornerRadius = 1.2
+        batteryBodyView.addSubview(batteryFillView)
+
+        batteryCapView.backgroundColor = UIColor.white.withAlphaComponent(0.9)
+        batteryCapView.layer.cornerRadius = Layout.batteryCapSize.width / 2
+        batteryPillView.addSubview(batteryCapView)
+
+        batteryBoltImageView.image = UIImage(
+            systemName: "bolt.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 7, weight: .bold)
+        )
+        batteryBoltImageView.tintColor = .white
+        batteryBoltImageView.contentMode = .center
+        batteryBoltImageView.layer.shadowColor = UIColor.black.cgColor
+        batteryBoltImageView.layer.shadowOpacity = 0.5
+        batteryBoltImageView.layer.shadowRadius = 1
+        batteryBoltImageView.layer.shadowOffset = .zero
+        batteryBoltImageView.isHidden = true
+        batteryPillView.addSubview(batteryBoltImageView)
+
     }
 
     @available(*, unavailable)
@@ -604,7 +687,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         let avatarX = (bounds.width - Layout.avatarSize) / 2
         avatarView.frame = CGRect(
             x: avatarX,
-            y: 0,
+            y: Layout.avatarTop,
             width: Layout.avatarSize,
             height: Layout.avatarSize
         )
@@ -621,17 +704,63 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         )
         signalBadgeImageView.frame = signalBadgeView.bounds
 
+        layoutBatteryPill()
+
+        let avatarBottom = Layout.avatarTop + Layout.avatarSize
         stemView.frame = CGRect(
             x: bounds.midX - 0.5,
-            y: Layout.avatarSize - 2,
+            y: avatarBottom - 2,
             width: 1,
-            height: Layout.dotOriginY - Layout.avatarSize + 2
+            height: Layout.dotOriginY - avatarBottom + 2
         )
         dotView.frame = CGRect(
             x: bounds.midX - Layout.dotSize / 2,
             y: Layout.dotOriginY,
             width: Layout.dotSize,
             height: Layout.dotSize
+        )
+    }
+
+    private func layoutBatteryPill() {
+        let horizontalPadding: CGFloat = 6
+        let body = Layout.batteryBodySize
+        let cap = Layout.batteryCapSize
+
+        let glyphWidth = body.width + 1 + cap.width
+        let pillWidth = glyphWidth + horizontalPadding * 2
+        batteryPillView.frame = CGRect(
+            x: (bounds.width - pillWidth) / 2,
+            y: 0,
+            width: pillWidth,
+            height: Layout.batteryHeight
+        )
+
+        batteryBodyView.frame = CGRect(
+            x: horizontalPadding,
+            y: (Layout.batteryHeight - body.height) / 2,
+            width: body.width,
+            height: body.height
+        )
+        batteryCapView.frame = CGRect(
+            x: batteryBodyView.frame.maxX + 1,
+            y: batteryBodyView.frame.midY - cap.height / 2,
+            width: cap.width,
+            height: cap.height
+        )
+        batteryBoltImageView.frame = batteryBodyView.frame
+        updateBatteryFillFrame()
+    }
+
+    private func updateBatteryFillFrame() {
+        guard let display = batteryDisplay else { return }
+        let inner = batteryBodyView.bounds.insetBy(dx: 2, dy: 2)
+        let ratio = CGFloat(min(max(display.level, 0), 100)) / 100
+        let width = display.level > 0 ? max(inner.width * ratio, 1.5) : 0
+        batteryFillView.frame = CGRect(
+            x: inner.minX,
+            y: inner.minY,
+            width: width,
+            height: inner.height
         )
     }
 
@@ -646,6 +775,10 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         signalBadgeImageView.image = nil
         signalBadgeView.isHidden = true
         fallbackLabel.text = nil
+        batteryDisplay = nil
+        batteryPillView.isHidden = true
+        batteryPillView.alpha = 1
+        batteryBoltImageView.isHidden = true
         accessibilityLabel = nil
         accessibilityValue = nil
         accessibilityTraits = [.button]
@@ -742,9 +875,46 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
             fallbackLabel.isHidden = false
         }
 
+        applyBattery(marker.battery)
+
         let signalDescription = marker.signal.map { ", Signal \($0.title)" } ?? ""
-        accessibilityLabel = "\(marker.displayName), \(marker.city.name) 프로필\(signalDescription)"
+        let batteryDescription = marker.battery.map { display in
+            var text = ", 배터리 약 \(display.level)퍼센트"
+            if display.isCharging { text += " 충전 중" }
+            if display.isMuted { text += ", 조금 전 값" }
+            return text
+        } ?? ""
+        accessibilityLabel =
+            "\(marker.displayName), \(marker.city.name) 프로필\(signalDescription)\(batteryDescription)"
         accessibilityHint = "두 번 탭하면 프로필 상태를 표시합니다"
+    }
+
+    private func applyBattery(_ display: GlobeBatteryDisplay?) {
+        batteryDisplay = display
+        guard let display else {
+            batteryPillView.isHidden = true
+            batteryPillView.alpha = 1
+            batteryBoltImageView.isHidden = true
+            return
+        }
+
+        batteryPillView.isHidden = false
+        batteryBoltImageView.isHidden = !display.isCharging
+
+        let fillColor: UIColor
+        if display.isMuted {
+            fillColor = UIColor(white: 0.72, alpha: 0.9)
+        } else if display.isCharging {
+            fillColor = .systemGreen
+        } else if display.level <= 20 {
+            fillColor = .systemRed
+        } else {
+            fillColor = .white
+        }
+        batteryFillView.backgroundColor = fillColor
+        batteryPillView.alpha = display.isMuted ? 0.62 : 1
+
+        setNeedsLayout()
     }
 }
 
@@ -847,14 +1017,16 @@ final class NativeGlobeMapView: MKMapView {
             displayName: "미나",
             city: CoupleCity.city(id: "seoul"),
             avatarData: nil,
-            signal: .free
+            signal: .free,
+            battery: GlobeBatteryDisplay(level: 18, isCharging: false, isMuted: false)
         ),
         partnerMarker: GlobeProfileMarker(
             id: .partner,
             displayName: "Sofia",
             city: CoupleCity.city(id: "paris"),
             avatarData: nil,
-            signal: .resting
+            signal: .resting,
+            battery: GlobeBatteryDisplay(level: 87, isCharging: true, isMuted: false)
         ),
         selection: .constant(nil)
     )

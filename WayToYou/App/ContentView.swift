@@ -18,6 +18,7 @@ struct ContentView: View {
     @State private var signalToast: SignalEvent?
     @State private var signalToastDismissTask: Task<Void, Never>?
     @State private var selectedGlobeMarker: GlobeMarkerSelection?
+    @State private var batteryMonitor = DeviceBatteryMonitor()
     @Environment(\.scenePhase) private var scenePhase
     #if DEBUG
     private let debugAccount: DebugAccount?
@@ -64,6 +65,9 @@ struct ContentView: View {
             .task(id: "heart-\(scenePhase)-\(store.isConnected)") { await syncHeartBursts() }
             .task(id: "signal-\(scenePhase)-\(store.isConnected)") { await syncSignals() }
             .task(id: "profile-\(scenePhase)-\(store.isConnected)") { await syncProfiles() }
+            .task(id: "presence-\(scenePhase)-\(store.activeConnectionID?.uuidString ?? "none")") {
+                await syncDevicePresence()
+            }
             .onChange(of: selectedTab) { _, tab in
                 if tab != .home {
                     selectedGlobeMarker = nil
@@ -213,7 +217,8 @@ struct ContentView: View {
             displayName: store.myProfile?.displayName ?? "나",
             city: store.homeCity,
             avatarData: store.myProfile.flatMap { store.avatarData(for: $0) },
-            signal: store.latestSignal(.outgoing, at: now)?.signal
+            signal: store.latestSignal(.outgoing, at: now)?.signal,
+            battery: GlobeBatteryDisplay(presence: store.myDevicePresence, at: now)
         )
     }
 
@@ -223,7 +228,8 @@ struct ContentView: View {
             displayName: store.partnerProfile?.displayName ?? "상대",
             city: store.partnerCity,
             avatarData: store.partnerProfile.flatMap { store.avatarData(for: $0) },
-            signal: store.latestSignal(.incoming, at: now)?.signal
+            signal: store.latestSignal(.incoming, at: now)?.signal,
+            battery: GlobeBatteryDisplay(presence: store.partnerDevicePresence, at: now)
         )
     }
 
@@ -364,6 +370,30 @@ struct ContentView: View {
             await store.refreshConnection()
             try? await Task.sleep(for: .seconds(30))
         }
+    }
+
+    /// foreground·연결 상태 동안만 배터리를 관찰한다.
+    /// 상태 변화는 monitor 콜백이 즉시 올리고, 같은 값의 주기 갱신은 store가 5분으로 제한한다.
+    /// DEBUG 시뮬레이터 계정도 이 경로를 그대로 타되 store가 fixture로 응답한다.
+    private func syncDevicePresence() async {
+        guard scenePhase == .active, store.isConnected else {
+            batteryMonitor.stop()
+            return
+        }
+
+        batteryMonitor.onChange = { reading in
+            Task { await store.publishDevicePresence(reading) }
+        }
+        batteryMonitor.start()
+
+        while !Task.isCancelled {
+            if let reading = batteryMonitor.currentReading {
+                await store.publishDevicePresence(reading)
+            }
+            await store.refreshPartnerDevicePresence()
+            try? await Task.sleep(for: .seconds(30))
+        }
+        batteryMonitor.stop()
     }
 
     private func emitHeart(incoming: Bool) {

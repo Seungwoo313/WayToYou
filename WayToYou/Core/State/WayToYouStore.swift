@@ -22,6 +22,10 @@ final class WayToYouStore {
     private(set) var avatarIsWorking = false
     private(set) var avatarMessage: String?
     private(set) var avatarDataByUserID: [UUID: Data] = [:]
+    /// 내 기기의 마지막 publish 결과. 서버 timestamp를 그대로 들고 있는 transient 값이다.
+    private(set) var myDevicePresence: DevicePresence?
+    /// 연결 상대의 마지막 배터리 상태. 로컬에 저장하지 않는다.
+    private(set) var partnerDevicePresence: DevicePresence?
 
     /// 서버가 없는 동안 상대 쪽 반응을 흉내 낸다.
     /// 배송 시간도 압축돼서 전체 루프를 몇 분 안에 볼 수 있다.
@@ -43,6 +47,10 @@ final class WayToYouStore {
         if case .connected = connectionStatus { return true }
         return false
     }
+    var activeConnectionID: UUID? {
+        guard case .connected(let connection) = connectionStatus else { return nil }
+        return connection.id
+    }
     var coupleRoute: CoupleRoute? {
         guard let mine = myProfile?.endpoint,
               let partner = partnerProfile?.endpoint else { return nil }
@@ -56,6 +64,8 @@ final class WayToYouStore {
     private var hasSyncedHearts = false
     private var hasSyncedSignals = false
     private var avatarRevisionByUserID: [UUID: String] = [:]
+    private var lastPublishedBatteryReading: DeviceBatteryReading?
+    private var lastPresencePublishAt: Date?
     #if DEBUG
     private var debugAccount: DebugAccount?
     #endif
@@ -82,6 +92,9 @@ final class WayToYouStore {
         static let partnerOpensAfter: TimeInterval = 45 * 60
         static let replyLeavesAfter: TimeInterval = 3 * 60 * 60
     }
+
+    /// 같은 배터리 값이라도 이 주기마다 한 번씩 서버 timestamp를 갱신해 freshness를 유지한다.
+    private static let presenceSameValueRefreshInterval: TimeInterval = 5 * 60
 
     init(
         defaults: UserDefaults = .standard,
@@ -559,6 +572,81 @@ final class WayToYouStore {
         signalMessage = nil
     }
 
+    // MARK: - Device Presence
+
+    /// 상태 변화는 즉시 올리고, 같은 값은 최대 5분에 한 번만 서버 timestamp를 갱신한다.
+    /// 시각은 항상 서버가 찍는다. 실패는 조용히 넘어가고 다음 변화나 주기에서 다시 시도한다.
+    func publishDevicePresence(_ reading: DeviceBatteryReading, now: Date = .now) async {
+        #if DEBUG
+        if debugAccount != nil {
+            myDevicePresence = DevicePresence(
+                batteryLevel: reading.level,
+                batteryState: reading.state,
+                updatedAt: now
+            )
+            return
+        }
+        #endif
+        guard isConnected, let backendConnectionService else { return }
+
+        let valueChanged = lastPublishedBatteryReading != reading
+        let refreshDue = now.timeIntervalSince(lastPresencePublishAt ?? .distantPast)
+            >= Self.presenceSameValueRefreshInterval
+        guard valueChanged || refreshDue else { return }
+
+        do {
+            let remote = try await backendConnectionService.setDevicePresence(
+                batteryLevel: reading.level,
+                batteryState: reading.state
+            )
+            myDevicePresence = remote.presence
+            lastPublishedBatteryReading = reading
+            lastPresencePublishAt = now
+        } catch {
+            // 배터리 공유 실패가 다른 흐름을 막으면 안 된다.
+        }
+    }
+
+    /// 앱이 활성화된 동안 상대의 최근 배터리 상태를 가볍게 동기화한다.
+    func refreshPartnerDevicePresence() async {
+        #if DEBUG
+        if let debugAccount {
+            partnerDevicePresence = debugAccount.partnerPresenceFixture
+            return
+        }
+        #endif
+        guard isConnected, let backendConnectionService else { return }
+
+        do {
+            partnerDevicePresence = try await backendConnectionService
+                .partnerDevicePresence()?.presence
+        } catch {
+            // 네트워크가 잠깐 끊겨도 표시 중인 값은 유지한다. 오래되면 freshness가 가려준다.
+        }
+    }
+
+    /// 배터리 공유 끄기. 서버 row를 지우고 내 표시도 내린다.
+    @discardableResult
+    func clearDevicePresence() async -> Bool {
+        #if DEBUG
+        if debugAccount != nil {
+            myDevicePresence = nil
+            return true
+        }
+        #endif
+        guard let backendConnectionService else { return false }
+
+        do {
+            try await backendConnectionService.clearDevicePresence()
+            myDevicePresence = nil
+            lastPublishedBatteryReading = nil
+            lastPresencePublishAt = nil
+            return true
+        } catch {
+            return false
+        }
+    }
+
     @discardableResult
     func sendHeartBurst(count: Int) async -> Bool {
         #if DEBUG
@@ -806,6 +894,10 @@ final class WayToYouStore {
         ) ?? []
         hasSyncedHearts = false
         hasSyncedSignals = false
+        myDevicePresence = nil
+        partnerDevicePresence = nil
+        lastPublishedBatteryReading = nil
+        lastPresencePublishAt = nil
 
         if let myProfile {
             homeCityID = myProfile.cityID
@@ -820,6 +912,8 @@ final class WayToYouStore {
     }
 
     private func applyRemoteConnectionState(_ state: RemoteConnectionState) {
+        let previousConnectionID = activeConnectionID
+
         if let profile = state.me?.profile {
             myProfile = profile
             homeCityID = profile.cityID
@@ -854,6 +948,13 @@ final class WayToYouStore {
 
         default:
             connectionStatus = .notConnected
+        }
+
+        if activeConnectionID != previousConnectionID {
+            myDevicePresence = nil
+            partnerDevicePresence = nil
+            lastPublishedBatteryReading = nil
+            lastPresencePublishAt = nil
         }
 
         save()

@@ -36,6 +36,17 @@ enum DebugAccount: String, CaseIterable {
         )
     }
 
+    /// 시뮬레이터에서 배터리 바 UI를 확인하기 위한 fixture.
+    /// 실기기 값이 아니며, 호출할 때마다 fresh한 timestamp로 갱신된다.
+    var partnerPresenceFixture: DevicePresence {
+        switch self {
+        case .mina:
+            DevicePresence(batteryLevel: 62, batteryState: .unplugged, updatedAt: .now)
+        case .sofia:
+            DevicePresence(batteryLevel: 87, batteryState: .charging, updatedAt: .now)
+        }
+    }
+
     var defaults: UserDefaults {
         let suiteName = "com.seungwoo.WayToYou.debug.\(rawValue)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {

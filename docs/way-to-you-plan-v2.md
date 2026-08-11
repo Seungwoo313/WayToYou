@@ -100,56 +100,33 @@ Way to You는 이 감정을 제품의 중심 상징으로 쓴다.
 
 사용자가 도시를 입력한다.
 
-### Step 2 — Your Airport
-
-도시 주변 공항 리스트를 보여준다.
-
-예:
-
-**Seoul**
-- ICN · Incheon International
-- GMP · Gimpo International
-
-질문:
-
-> **Which airport brings your partner to you?**
-
-또는:
-
-> **연인이 당신을 만나러 올 때, 어느 공항으로 오나요?**
-
-사용자가 하나를 선택한다.
-
-### Step 3 — Partner Connection
+### Step 2 — Partner Connection
 
 상대를 초대한다.
 
-상대방도:
-- 도시
-- 공항
+상대방도 자신의 도시를 선택한다.
 
-을 선택한다.
+### Step 3 — Your Cities
 
-### Step 4 — Your Route
-
-둘이 연결되면 앱이 둘의 관계를 하나의 Route로 보여준다.
+둘이 연결되면 앱이 두 사람을 각 도시 중심의 프로필 마커로 보여준다.
 
 예:
 
-`ICN ↔ FLR`
+`Seoul ↔ Firenze`
 
 카피:
 
-> **Your Route**
+> **Our Cities**
 
-이 Route가:
-- Globe
+공항은 온보딩에서 프로필에 고정하지 않는다. Letter·Gift·Parcel을 보낼 때 선택한 도시 주변 공항을 MapKit으로 검색하고, 그 배송의 Route로 저장한다.
+
+배송별 Route가:
 - Gift Delivery
 - Air Mail
-- Keepsakes
+- Keepsakes의 당시 이동 기록
 - 수하물 태그
 
-전부의 기준이 된다.
+의 기준이 된다.
 
 ---
 
@@ -168,12 +145,12 @@ Way to You는 실시간 위치 추적 앱이 아니다.
 ### 사용하는 것
 
 - 사용자가 선택한 도시
-- 사용자가 선택한 공항
-- 둘의 고정 Route
+- 소포를 보낼 때 선택한 출발·도착 공항
+- 각 배송에 저장되는 Route
 
 즉:
 
-> **사람을 추적하지 않고, 관계의 두 기준점을 연결한다.**
+> **사람을 추적하지 않고, 두 도시와 마음이 이동하는 Route를 보여준다.**
 
 ---
 
@@ -216,11 +193,19 @@ Signal은 삐삐 / 무전기 감성으로 만든다.
 > “나 지금 이런 상태야.”
 
 예:
-- 🌙 Sleeping
+- 😴 Sleeping
 - 💻 Focusing
 - ☕ Free
 - 🚶 Out
 - 🏠 Resting
+
+### 앱 안의 표현
+
+- Signal 선택과 홈 액션은 컬러 유니코드 이모지를 사용한다.
+- 내/상대의 최신 Signal은 각 도시 프로필 마커의 모서리에 작은 이모지 스티커로 표시한다.
+- 원형 배경 대신 이모지 실제 외곽을 따라 얇은 흰 테두리를 두어 위성 지도에서도 읽히게 한다.
+- 새 Signal을 받으면 `☕️ 승우 · 3분 전`처럼 이모지·이름·상대 시간만 담은 작은 토스트를 잠시 표시한다.
+- 상대 상태를 설명하는 큰 지속 카드나 온라인·마지막 접속 UI는 사용하지 않는다.
 
 ### 핵심 UX
 
@@ -411,13 +396,19 @@ GIFT 0027
 
 홈의 대표 비주얼.
 
-작은 지구 위에:
-- 두 사람의 공항
+지구 위에:
+- 두 사람의 도시 중심 프로필 마커
 - 둘의 Route
 - 현재 이동 중인 Gift
 - 다른 사용자들의 익명 비행기
 
 가 보인다.
+
+사람 프로필은 공항이 아니라 도시 중심에 둔다. 공항은 소포를 보낼 때 Route의 출발·도착 맥락으로만 사용한다. 실시간 위치나 상대의 현재 위치를 표시하지 않는다.
+
+프로필 마커는 원형 사진, 선택적인 Signal 이모지, 작은 배터리 상태로 구성한다. 탭하면 짧은 spring/halo와 selection 햅틱으로만 반응하고, 큰 callout이나 강제 카메라 이동은 하지 않는다. 이름·사진·Signal·배터리가 바뀌어도 사용자가 보고 있던 지구 시점은 유지한다.
+
+배터리는 실시간 접속 상태가 아니라 연결된 두 사람만 공유하는 참고 정보다. 앱이 활성화된 동안만 수집하고 현재 연결 상대 외에는 읽을 수 없게 한다. 공개 API의 수치는 상태바보다 거칠 수 있으므로 마커에는 퍼센트를 쓰지 않고 작은 배터리 아이콘의 채움과 충전 상태만 표시한다. 알 수 없는 값은 표시하지 않으며, 10분이 지난 값은 흐리게 하고 60분이 지나면 아이콘을 숨긴다. 기기 이름·모델·식별자와 백그라운드 위치는 함께 저장하지 않는다.
 
 ### 내 비행기
 
@@ -544,8 +535,6 @@ VOICE TAPES
 ## Us
 
 - 둘의 도시
-- 공항
-- Your Route
 - 관계 설정
 - 초대 관리
 
@@ -621,18 +610,17 @@ Way to You는 Social Network가 아니라:
 1. 회원가입
 2. 커플 연결
 3. 도시 설정
-4. 공항 선택
-5. `Your Route`
-6. Heart
-7. Signal
-8. Interactive Widget
-9. Polaroid
-10. Voice Tape
-11. Letter
-12. 기본 Gift Delivery
-13. Globe
-14. 익명 비행기
-15. Keepsakes
+4. 도시 프로필 Globe
+5. Heart
+6. Signal
+7. Interactive Widget
+8. Polaroid
+9. Voice Tape
+10. Letter
+11. Gift 작성 중 공항 선택
+12. 기본 Gift Delivery와 배송별 Route
+13. 익명 비행기
+14. Keepsakes
 
 ## Later
 
