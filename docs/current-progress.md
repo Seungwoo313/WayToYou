@@ -2,7 +2,7 @@
 
 작성일: 2026-08-11
 브랜치: `codex/product-plan-mvp`
-최신 커밋: `20d9c17 feat: add secure profile photo storage`
+최신 커밋: `57cb5d3 style: refine avatar crop sheet background`
 
 ## 현재 방향
 
@@ -90,6 +90,26 @@
 
 - `20d9c17 feat: add secure profile photo storage`
 
+### 프로필 사진 클라이언트 흐름
+
+- 사진 라이브러리와 카메라에서 프로필 사진을 선택할 수 있다.
+- 고정 마스크 안에서 사진을 확대·이동해 크롭할 수 있다.
+- 네이티브 다크 시트와 iOS 내비게이션 컨트롤을 사용한다.
+- JPEG로 처리한 사진을 Supabase Storage에 업로드한다.
+- 온보딩과 `우리` 화면에서 프로필 사진을 표시한다.
+- 최신 크롭 UI는 아직 `승우의 iPhone`에서 재검증해야 한다.
+
+관련 커밋:
+
+- `2b77877 feat: add profile photo uploads`
+- `95b9607 feat: add interactive profile photo crop`
+- `f28826b refactor: remove profile photo crop flow`
+- `550d8b6 feat: add fixed-mask profile photo crop`
+- `76aa126 fix: center profile photo crop layout`
+- `948d4b3 fix: use native crop navigation controls`
+- `4663794 style: present avatar crop in native dark sheet`
+- `57cb5d3 style: refine avatar crop sheet background`
+
 ## Supabase 상태
 
 - Supabase Swift SDK와 앱 API 연결은 기존 설정으로 구성되어 있다.
@@ -103,6 +123,8 @@
 - `supabase/config.toml`
 - `supabase/migrations/20260810194000_secure_partner_connections.sql`
 - `supabase/migrations/20260811171000_mapkit_route_endpoints.sql`
+- `supabase/migrations/20260811174000_hearts.sql`
+- `supabase/migrations/20260811180500_reset_test_users.sql`
 - `supabase/migrations/20260811190000_signals.sql`
 - `supabase/migrations/20260811193000_profile_photos.sql`
 - `WayToYou/Services/SupabaseConnectionService.swift`
@@ -112,6 +134,7 @@
 - `supabase db push`는 아직 실행하지 않았다.
 - 원격 DB의 실제 마이그레이션 적용 상태는 아직 확인하지 않았다.
 - 따라서 원격 DB에 `route_endpoint` 컬럼과 `wty_save_profile(text, jsonb)` 함수가 존재한다고 가정하면 안 된다.
+- Heart 테이블/RPC와 테스트 사용자 초기화 마이그레이션도 원격 DB에 적용됐다고 가정하면 안 된다.
 - Signal 테이블/RPC와 프로필 사진 Storage 정책도 원격 DB에 적용됐다고 가정하면 안 된다.
 - 프로필 저장의 서버 연동을 확인하려면 먼저 `migration list`와 `db push --dry-run`을 실행해야 한다.
 
@@ -130,9 +153,10 @@ supabase db push
 1. 다른 작업공간에서 Supabase 마이그레이션 상태 확인 및 필요 시 적용
 2. 원격 DB 적용 후 프로필 저장·복원 end-to-end 검증
 3. 최신 Heart 흐름을 `승우의 iPhone`에서 재검증
-4. 프로필 사진 선택·업로드·비공개 다운로드 클라이언트 구현
-5. Letter·Parcel·Delivery·Archive 흐름 구현
-6. Widget 및 후속 Product Plan 기능 구현
+4. 최신 프로필 사진 크롭·업로드 흐름을 `승우의 iPhone`에서 검증
+5. 프로필 사진 비공개 다운로드와 상대방 표시 end-to-end 검증
+6. Letter·Parcel·Delivery·Archive 흐름 구현
+7. Widget 및 후속 Product Plan 기능 구현
 
 ## 검증 메모
 
@@ -141,4 +165,5 @@ supabase db push
 - 변경 후 iOS 작업은 실기기 실행까지 확인한다.
 - MapKit 온보딩과 무채색 UI 버전은 실기기에서 확인했다.
 - 최신 Signal Swift 변경분은 다음 실기기 빌드에서 재검증해야 한다.
+- 최신 프로필 사진 선택·크롭·업로드 변경분도 다음 실기기 빌드에서 재검증해야 한다.
 - 앱 인증 토큰은 iOS Keychain을 사용하며, Keychain은 Supabase DB가 아니라 기기 내부의 보호된 인증 저장소다.
