@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 도시·데모 설정. 예전에는 애플 기본 Form이라 메인 화면과 완전히 다른 앱처럼 보였다.
-struct SettingsSheet: View {
+struct UsView: View {
     @Bindable var store: WayToYouStore
     let presentedAsSheet: Bool
 
@@ -93,7 +93,7 @@ struct SettingsSheet: View {
                     .padding(Metric.screenPadding)
                 }
             }
-            .navigationTitle("설정")
+            .navigationTitle("우리")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if presentedAsSheet {

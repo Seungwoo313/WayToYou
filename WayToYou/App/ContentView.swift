@@ -3,7 +3,7 @@ import UIKit
 
 struct ContentView: View {
     private enum AppTab: Hashable {
-        case home, log, settings
+        case home, keepsakes, us
     }
 
     @State private var store = WayToYouStore()
@@ -50,8 +50,8 @@ struct ContentView: View {
             switch UserDefaults.standard.string(forKey: "previewSheet") {
             case "compose": route = .compose
             case "signal": route = .signal
-            case "log": selectedTab = .log
-            case "settings": selectedTab = .settings
+            case "keepsakes": selectedTab = .keepsakes
+            case "us": selectedTab = .us
             case "letter":
                 if let parcel = store.waitingToOpen(at: .now).first ?? store.lastOpenedIncoming() {
                     route = .letter(parcel)
@@ -81,8 +81,8 @@ struct ContentView: View {
                 home
             }
 
-            Tab("기록", systemImage: "clock.arrow.circlepath", value: AppTab.log) {
-                MemoryLogSheet(
+            Tab("간직함", systemImage: "archivebox", value: AppTab.keepsakes) {
+                KeepsakesView(
                     store: store,
                     now: now,
                     presentedAsSheet: false
@@ -91,8 +91,8 @@ struct ContentView: View {
                 }
             }
 
-            Tab("설정", systemImage: "gearshape", value: AppTab.settings) {
-                SettingsSheet(store: store, presentedAsSheet: false)
+            Tab("우리", systemImage: "person.2", value: AppTab.us) {
+                UsView(store: store, presentedAsSheet: false)
             }
         }
     }
@@ -161,13 +161,13 @@ struct ContentView: View {
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             }
 
-        case .log:
-            MemoryLogSheet(store: store, now: now) { parcel in
+        case .keepsakes:
+            KeepsakesView(store: store, now: now) { parcel in
                 route = .letter(parcel)
             }
 
-        case .settings:
-            SettingsSheet(store: store)
+        case .us:
+            UsView(store: store)
                 .presentationDragIndicator(.visible)
         }
     }
@@ -415,16 +415,16 @@ struct SheetRoute {
         case signal
         case compose
         case letter(Parcel)
-        case log
-        case settings
+        case keepsakes
+        case us
 
         var id: String {
             switch self {
             case .signal: "signal"
             case .compose: "compose"
             case .letter(let parcel): "letter-\(parcel.id)"
-            case .log: "log"
-            case .settings: "settings"
+            case .keepsakes: "keepsakes"
+            case .us: "us"
             }
         }
     }
@@ -434,8 +434,8 @@ struct SheetRoute {
     static let none = SheetRoute(presented: nil)
     static let signal = SheetRoute(presented: .signal)
     static let compose = SheetRoute(presented: .compose)
-    static let log = SheetRoute(presented: .log)
-    static let settings = SheetRoute(presented: .settings)
+    static let keepsakes = SheetRoute(presented: .keepsakes)
+    static let us = SheetRoute(presented: .us)
     static func letter(_ parcel: Parcel) -> SheetRoute { SheetRoute(presented: .letter(parcel)) }
 }
 
