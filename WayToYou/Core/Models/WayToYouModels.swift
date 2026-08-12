@@ -230,7 +230,14 @@ extension Date {
 
     /// "02:03" — 상대 도시의 지금 시각.
     func hourMinute(in timeZone: TimeZone) -> String {
-        formatted(Self.style(in: timeZone).hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let components = calendar.dateComponents([.hour, .minute], from: self)
+        return String(
+            format: "%02d:%02d",
+            components.hour ?? 0,
+            components.minute ?? 0
+        )
     }
 
     /// "화" — 시차 때문에 요일이 다를 수 있어서 시각 옆에 붙인다.

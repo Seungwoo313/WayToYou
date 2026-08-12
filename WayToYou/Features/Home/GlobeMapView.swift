@@ -83,6 +83,9 @@ struct GlobeMapView: UIViewRepresentable {
     let partnerMarker: GlobeProfileMarker
     @Binding var markerOrder: GlobeMarkerOrder
     @Binding var selection: GlobeMarkerSelection?
+    let showsRouteHeart: Bool
+    let animatesRouteHeart: Bool
+    let routeHeartEmoji: String
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -115,12 +118,19 @@ struct GlobeMapView: UIViewRepresentable {
             GlobeProfileAnnotationView.self,
             forAnnotationViewWithReuseIdentifier: GlobeProfileAnnotationView.reuseIdentifier
         )
+        mapView.register(
+            RouteHeartAnnotationView.self,
+            forAnnotationViewWithReuseIdentifier: RouteHeartAnnotationView.reuseIdentifier
+        )
 
         context.coordinator.connect(to: mapView)
         context.coordinator.requestInitialFraming(cameraFraming)
         context.coordinator.sync(
             markers: markers,
             route: cityRoute,
+            showsRouteHeart: showsRouteHeart,
+            animatesRouteHeart: animatesRouteHeart,
+            routeHeartEmoji: routeHeartEmoji,
             in: mapView
         )
         return mapView
@@ -139,6 +149,9 @@ struct GlobeMapView: UIViewRepresentable {
         context.coordinator.sync(
             markers: markers,
             route: cityRoute,
+            showsRouteHeart: showsRouteHeart,
+            animatesRouteHeart: animatesRouteHeart,
+            routeHeartEmoji: routeHeartEmoji,
             in: mapView
         )
     }
@@ -189,6 +202,19 @@ struct GlobeMapView: UIViewRepresentable {
                     longitude: $0.longitude
                 )
             }
+        }
+
+        var midpointCoordinate: CLLocationCoordinate2D {
+            let firstVector = SphereVector(
+                latitude: first.latitude,
+                longitude: first.longitude
+            )
+            let secondVector = SphereVector(
+                latitude: second.latitude,
+                longitude: second.longitude
+            )
+            return (firstVector + secondVector).normalized()?.coordinate
+                ?? firstVector.stablePerpendicular().coordinate
         }
     }
 
@@ -370,8 +396,12 @@ struct GlobeMapView: UIViewRepresentable {
         private var annotationsByID: [GlobeProfileMarker.ID: GlobeProfileAnnotation] = [:]
         private var latestMarkers: [GlobeProfileMarker] = []
         private var latestRoute: CityRoute?
+        private var latestShowsRouteHeart = true
+        private var latestAnimatesRouteHeart = true
+        private var latestRouteHeartEmoji = RouteHeartEmoji.pink.rawValue
         private var appliedRoute: CityRoute?
         private var routeOverlay: MKGeodesicPolyline?
+        private var routeHeartAnnotation: RouteHeartAnnotation?
         private var requestedFraming: CameraFraming?
         private var needsInitialFraming = false
         private var defersMarkerSyncUntilCameraCommit = false
@@ -411,10 +441,16 @@ struct GlobeMapView: UIViewRepresentable {
         fileprivate func sync(
             markers: [GlobeProfileMarker],
             route: CityRoute,
+            showsRouteHeart: Bool,
+            animatesRouteHeart: Bool,
+            routeHeartEmoji: String,
             in mapView: MKMapView
         ) {
             latestMarkers = markers
             latestRoute = route
+            latestShowsRouteHeart = showsRouteHeart
+            latestAnimatesRouteHeart = animatesRouteHeart
+            latestRouteHeartEmoji = routeHeartEmoji
             guard !needsInitialFraming,
                   !defersMarkerSyncUntilCameraCommit else { return }
             applyLatestMapContent(in: mapView)
@@ -426,23 +462,62 @@ struct GlobeMapView: UIViewRepresentable {
         }
 
         private func applyLatestRoute(in mapView: MKMapView) {
-            guard appliedRoute != latestRoute else { return }
+            let routeChanged = appliedRoute != latestRoute
 
-            if let routeOverlay {
-                mapView.removeOverlay(routeOverlay)
-                self.routeOverlay = nil
+            if routeChanged {
+                if let routeOverlay {
+                    mapView.removeOverlay(routeOverlay)
+                    self.routeOverlay = nil
+                }
+                if let routeHeartAnnotation {
+                    mapView.removeAnnotation(routeHeartAnnotation)
+                    self.routeHeartAnnotation = nil
+                }
+                appliedRoute = latestRoute
+
+                if let latestRoute, latestRoute.hasVisibleSpan {
+                    var coordinates = latestRoute.coordinates
+                    let overlay = MKGeodesicPolyline(
+                        coordinates: &coordinates,
+                        count: coordinates.count
+                    )
+                    routeOverlay = overlay
+                    mapView.addOverlay(overlay, level: .aboveLabels)
+                }
             }
-            appliedRoute = latestRoute
 
-            guard let latestRoute,
-                  latestRoute.hasVisibleSpan else { return }
-            var coordinates = latestRoute.coordinates
-            let overlay = MKGeodesicPolyline(
-                coordinates: &coordinates,
-                count: coordinates.count
+            syncRouteHeart(in: mapView)
+        }
+
+        private func syncRouteHeart(in mapView: MKMapView) {
+            guard latestShowsRouteHeart,
+                  let latestRoute,
+                  latestRoute.hasVisibleSpan else {
+                if let routeHeartAnnotation {
+                    mapView.removeAnnotation(routeHeartAnnotation)
+                    self.routeHeartAnnotation = nil
+                }
+                return
+            }
+
+            if let routeHeartAnnotation {
+                if routeHeartAnnotation.emoji != latestRouteHeartEmoji {
+                    routeHeartAnnotation.emoji = latestRouteHeartEmoji
+                }
+                (mapView.view(for: routeHeartAnnotation) as? RouteHeartAnnotationView)?
+                    .configure(
+                        emoji: latestRouteHeartEmoji,
+                        animatesHeartbeat: latestAnimatesRouteHeart
+                    )
+                return
+            }
+
+            let annotation = RouteHeartAnnotation(
+                coordinate: latestRoute.midpointCoordinate,
+                emoji: latestRouteHeartEmoji
             )
-            routeOverlay = overlay
-            mapView.addOverlay(overlay, level: .aboveLabels)
+            routeHeartAnnotation = annotation
+            mapView.addAnnotation(annotation)
         }
 
         private func applyLatestMarkers(in mapView: MKMapView) {
@@ -556,6 +631,21 @@ struct GlobeMapView: UIViewRepresentable {
             _ mapView: MKMapView,
             viewFor annotation: any MKAnnotation
         ) -> MKAnnotationView? {
+            if annotation is RouteHeartAnnotation {
+                let view = mapView.dequeueReusableAnnotationView(
+                    withIdentifier: RouteHeartAnnotationView.reuseIdentifier,
+                    for: annotation
+                )
+                if let heartAnnotation = annotation as? RouteHeartAnnotation,
+                   let heartView = view as? RouteHeartAnnotationView {
+                    heartView.configure(
+                        emoji: heartAnnotation.emoji,
+                        animatesHeartbeat: latestAnimatesRouteHeart
+                    )
+                }
+                return view
+            }
+
             guard let annotation = annotation as? GlobeProfileAnnotation else { return nil }
             let view = mapView.dequeueReusableAnnotationView(
                 withIdentifier: GlobeProfileAnnotationView.reuseIdentifier,
@@ -691,6 +781,125 @@ struct GlobeMapView: UIViewRepresentable {
             }
         }
 
+    }
+}
+
+private final class RouteHeartAnnotation: NSObject, MKAnnotation {
+    @objc dynamic var coordinate: CLLocationCoordinate2D
+    var emoji: String
+
+    init(coordinate: CLLocationCoordinate2D, emoji: String) {
+        self.coordinate = coordinate
+        self.emoji = emoji
+        super.init()
+    }
+}
+
+private final class RouteHeartAnnotationView: MKAnnotationView {
+    static let reuseIdentifier = "RouteHeartAnnotationView"
+
+    private let heartLabel = UILabel()
+    private var lifecycleObservers: [NSObjectProtocol] = []
+    private var animatesHeartbeat = true
+
+    override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+
+        bounds = CGRect(x: 0, y: 0, width: 32, height: 32)
+        backgroundColor = .clear
+        isOpaque = false
+        canShowCallout = false
+        displayPriority = .required
+        isAccessibilityElement = true
+        accessibilityLabel = "두 사람을 잇는 하트"
+
+        heartLabel.font = .systemFont(ofSize: 22)
+        heartLabel.textAlignment = .center
+        heartLabel.frame = bounds
+        heartLabel.layer.shadowColor = UIColor.black.cgColor
+        heartLabel.layer.shadowOpacity = 0.45
+        heartLabel.layer.shadowRadius = 3
+        heartLabel.layer.shadowOffset = .zero
+        addSubview(heartLabel)
+
+        let center = NotificationCenter.default
+        lifecycleObservers = [
+            center.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.restartHeartbeatIfVisible()
+            },
+            center.addObserver(
+                forName: UIApplication.willResignActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.stopHeartbeat()
+            },
+            center.addObserver(
+                forName: UIAccessibility.reduceMotionStatusDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.restartHeartbeatIfVisible()
+            }
+        ]
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        window == nil ? stopHeartbeat() : startHeartbeatIfVisible()
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        stopHeartbeat()
+    }
+
+    func configure(emoji: String, animatesHeartbeat: Bool) {
+        heartLabel.text = emoji
+        accessibilityLabel = "두 사람을 잇는 \(emoji)"
+        self.animatesHeartbeat = animatesHeartbeat
+        if animatesHeartbeat {
+            startHeartbeatIfVisible()
+        } else {
+            stopHeartbeat()
+        }
+    }
+
+    private func startHeartbeatIfVisible() {
+        guard window != nil,
+              UIApplication.shared.applicationState == .active,
+              animatesHeartbeat,
+              !UIAccessibility.isReduceMotionEnabled,
+              heartLabel.layer.animation(forKey: "singleHeartbeat") == nil else { return }
+
+        let heartbeat = CAKeyframeAnimation(keyPath: "transform.scale")
+        heartbeat.values = [1, 1.24, 1, 1]
+        heartbeat.keyTimes = [0, 0.12, 0.26, 1]
+        heartbeat.duration = 1.45
+        heartbeat.repeatCount = .infinity
+        heartbeat.calculationMode = .cubic
+        heartLabel.layer.add(heartbeat, forKey: "singleHeartbeat")
+    }
+
+    private func restartHeartbeatIfVisible() {
+        stopHeartbeat()
+        startHeartbeatIfVisible()
+    }
+
+    private func stopHeartbeat() {
+        heartLabel.layer.removeAnimation(forKey: "singleHeartbeat")
     }
 }
 
@@ -1222,7 +1431,10 @@ final class NativeGlobeMapView: MKMapView {
             battery: GlobeBatteryDisplay(level: 87, isCharging: true, isMuted: false)
         ),
         markerOrder: .constant(.mineOnLeft),
-        selection: .constant(nil)
+        selection: .constant(nil),
+        showsRouteHeart: true,
+        animatesRouteHeart: true,
+        routeHeartEmoji: RouteHeartEmoji.pink.rawValue
     )
     .ignoresSafeArea()
 }

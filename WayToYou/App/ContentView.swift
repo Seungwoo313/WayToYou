@@ -25,6 +25,10 @@ struct ContentView: View {
         ClockDisplayFormat.twentyFourHour.rawValue
     @AppStorage("temperatureUnit") private var temperatureUnitRawValue =
         TemperatureUnit.celsius.rawValue
+    @AppStorage("showsRouteHeart") private var showsRouteHeart = true
+    @AppStorage("animatesRouteHeart") private var animatesRouteHeart = true
+    @AppStorage("routeHeartEmoji") private var routeHeartEmojiRawValue =
+        RouteHeartEmoji.pink.rawValue
     @Environment(\.scenePhase) private var scenePhase
     #if DEBUG
     private let debugAccount: DebugAccount?
@@ -104,6 +108,7 @@ struct ContentView: View {
                 case "signal": route = .signal
                 case "keepsakes": selectedTab = .keepsakes
                 case "us": selectedTab = .us
+                case "settings": selectedTab = .settings
                 case "letter":
                     if let parcel = store.waitingToOpen(at: .now).first ?? store.lastOpenedIncoming() {
                         route = .letter(parcel)
@@ -169,7 +174,10 @@ struct ContentView: View {
                 SettingsView(
                     store: store,
                     clockFormat: clockDisplayFormatBinding,
-                    temperatureUnit: temperatureUnitBinding
+                    temperatureUnit: temperatureUnitBinding,
+                    showsRouteHeart: $showsRouteHeart,
+                    animatesRouteHeart: $animatesRouteHeart,
+                    routeHeartEmoji: routeHeartEmojiBinding
                 )
             }
         }
@@ -197,7 +205,10 @@ struct ContentView: View {
                         myMarker: myGlobeMarker,
                         partnerMarker: partnerGlobeMarker,
                         markerOrder: $globeMarkerOrder,
-                        selection: $selectedGlobeMarker
+                        selection: $selectedGlobeMarker,
+                        showsRouteHeart: showsRouteHeart,
+                        animatesRouteHeart: animatesRouteHeart,
+                        routeHeartEmoji: routeHeartEmoji.rawValue
                     )
 
                     if let signalToast {
@@ -275,6 +286,17 @@ struct ContentView: View {
         Binding(
             get: { temperatureUnit },
             set: { temperatureUnitRawValue = $0.rawValue }
+        )
+    }
+
+    private var routeHeartEmoji: RouteHeartEmoji {
+        RouteHeartEmoji(rawValue: routeHeartEmojiRawValue) ?? .pink
+    }
+
+    private var routeHeartEmojiBinding: Binding<RouteHeartEmoji> {
+        Binding(
+            get: { routeHeartEmoji },
+            set: { routeHeartEmojiRawValue = $0.rawValue }
         )
     }
 
@@ -597,17 +619,17 @@ private struct ClockRow: View {
     @ViewBuilder
     private func weatherRow(for city: CoupleCity) -> some View {
         if let weather = weatherByCityID[city.id] {
+            let temperatureText = temperatureUnit.displayTemperature(
+                fromCelsius: weather.temperatureCelsius
+            )
             HStack(spacing: 5) {
                 Image(systemName: weather.symbolName)
                     .symbolRenderingMode(.multicolor)
-                Text(
-                    temperatureUnit.displayTemperature(
-                        fromCelsius: weather.temperatureCelsius
-                    )
-                )
-                .monospacedDigit()
-                .contentTransition(.numericText())
-                .foregroundStyle(Palette.textSecondary)
+                Text(temperatureText)
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                    .animation(.snappy(duration: 0.38), value: temperatureText)
+                    .foregroundStyle(Palette.textSecondary)
             }
             .font(.system(size: 14, weight: .medium, design: .rounded))
             .frame(height: 18)

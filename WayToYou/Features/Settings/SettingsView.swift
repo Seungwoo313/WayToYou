@@ -68,10 +68,47 @@ enum TemperatureUnit: String, CaseIterable, Identifiable {
     }
 }
 
+enum RouteHeartEmoji: String, CaseIterable, Identifiable {
+    case red = "❤️"
+    case pink = "🩷"
+    case orange = "🧡"
+    case yellow = "💛"
+    case green = "💚"
+    case blue = "💙"
+    case lightBlue = "🩵"
+    case purple = "💜"
+    case brown = "🤎"
+    case black = "🖤"
+    case gray = "🩶"
+    case white = "🤍"
+    case broken = "💔"
+    case exclamation = "❣️"
+    case twoHearts = "💕"
+    case revolving = "💞"
+    case beating = "💓"
+    case growing = "💗"
+    case sparkling = "💖"
+    case arrow = "💘"
+    case ribbon = "💝"
+    case decoration = "💟"
+    case fire = "❤️‍🔥"
+    case mending = "❤️‍🩹"
+    case suit = "♥️"
+    case heartHands = "🫶"
+    case fingerHeart = "🫰"
+    case loveLetter = "💌"
+    case anatomical = "🫀"
+
+    var id: String { rawValue }
+}
+
 struct SettingsView: View {
     @Bindable var store: WayToYouStore
     @Binding var clockFormat: ClockDisplayFormat
     @Binding var temperatureUnit: TemperatureUnit
+    @Binding var showsRouteHeart: Bool
+    @Binding var animatesRouteHeart: Bool
+    @Binding var routeHeartEmoji: RouteHeartEmoji
 
     @State private var presentedSetting: PresentedSetting?
 
@@ -80,6 +117,7 @@ struct SettingsView: View {
         case city
         case airport
         case temperature
+        case routeHeart
 
         var id: String { rawValue }
     }
@@ -109,6 +147,13 @@ struct SettingsView: View {
             .sheet(item: $presentedSetting) { setting in
                 settingSheet(setting)
             }
+            #if DEBUG
+            .onAppear {
+                if UserDefaults.standard.string(forKey: "previewSetting") == "routeHeart" {
+                    presentedSetting = .routeHeart
+                }
+            }
+            #endif
         }
         .presentationBackground(Palette.space)
     }
@@ -158,7 +203,30 @@ struct SettingsView: View {
                 ) {
                     presentedSetting = .temperature
                 }
+
+                Divider().overlay(Palette.hairline)
+
+                toggleSettingRow(
+                    title: "경로 위에 하트 표시",
+                    systemImage: "heart.fill",
+                    isOn: $showsRouteHeart
+                )
+
+                if showsRouteHeart {
+                    Divider()
+                        .overlay(Palette.hairline)
+                        .padding(.leading, 38)
+
+                    routeHeartDetailRow
+
+                    Divider()
+                        .overlay(Palette.hairline)
+                        .padding(.leading, 38)
+
+                    routeHeartAnimationDetailRow
+                }
             }
+            .animation(.snappy(duration: 0.25), value: showsRouteHeart)
             .padding(.horizontal, Metric.l)
             .glassPanel(radius: Metric.cardRadius)
 
@@ -211,6 +279,74 @@ struct SettingsView: View {
         .disabled(store.connectionIsWorking)
     }
 
+    private func toggleSettingRow(
+        title: String,
+        systemImage: String,
+        isOn: Binding<Bool>
+    ) -> some View {
+        HStack(spacing: Metric.m) {
+            Image(systemName: systemImage)
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(Palette.textSecondary)
+                .frame(width: 26)
+
+            Text(title)
+                .font(.rounded(.subheadline, .semibold))
+                .foregroundStyle(Palette.textPrimary)
+
+            Spacer(minLength: Metric.s)
+
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .tint(.pink)
+        }
+        .frame(minHeight: 56)
+        .contentShape(Rectangle())
+    }
+
+    private var routeHeartDetailRow: some View {
+        Button {
+            presentedSetting = .routeHeart
+        } label: {
+            HStack(spacing: Metric.s) {
+                Text("모양")
+                    .font(.rounded(.footnote, .medium))
+                    .foregroundStyle(Palette.textSecondary)
+
+                Spacer(minLength: Metric.s)
+
+                Text(routeHeartEmoji.rawValue)
+                    .font(.system(size: 22))
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Palette.textTertiary)
+            }
+            .padding(.leading, 38)
+            .frame(minHeight: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    private var routeHeartAnimationDetailRow: some View {
+        HStack(spacing: Metric.s) {
+            Text("박동 애니메이션")
+                .font(.rounded(.footnote, .medium))
+                .foregroundStyle(Palette.textSecondary)
+
+            Spacer(minLength: Metric.s)
+
+            Toggle("", isOn: $animatesRouteHeart)
+                .labelsHidden()
+                .tint(.pink)
+        }
+        .padding(.leading, 38)
+        .frame(minHeight: 48)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
     @ViewBuilder
     private func settingSheet(_ setting: PresentedSetting) -> some View {
         switch setting {
@@ -239,6 +375,11 @@ struct SettingsView: View {
             TemperatureUnitPicker(selection: $temperatureUnit)
                 .presentationDetents([.height(250)])
                 .presentationBackground(Palette.space)
+
+        case .routeHeart:
+            RouteHeartEmojiPicker(selection: $routeHeartEmoji)
+                .presentationDetents([.height(430)])
+                .presentationBackground(Palette.space)
         }
     }
 
@@ -261,6 +402,71 @@ struct SettingsView: View {
                 city: profile.city,
                 defaultAirport: defaultAirport
             )
+        }
+    }
+}
+
+private struct RouteHeartEmojiPicker: View {
+    @Binding var selection: RouteHeartEmoji
+    @Environment(\.dismiss) private var dismiss
+
+    private let columns = Array(
+        repeating: GridItem(.flexible(), spacing: Metric.s),
+        count: 6
+    )
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Palette.spaceDeep.ignoresSafeArea()
+
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: Metric.s) {
+                        ForEach(RouteHeartEmoji.allCases) { heart in
+                            Button {
+                                selection = heart
+                            } label: {
+                                Text(heart.rawValue)
+                                    .font(.system(size: 28))
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 48)
+                                    .background(
+                                        selection == heart
+                                            ? Color.white.opacity(0.14)
+                                            : Color.clear,
+                                        in: RoundedRectangle(
+                                            cornerRadius: 14,
+                                            style: .continuous
+                                        )
+                                    )
+                                    .overlay {
+                                        if selection == heart {
+                                            RoundedRectangle(
+                                                cornerRadius: 14,
+                                                style: .continuous
+                                            )
+                                            .strokeBorder(Color.white.opacity(0.32), lineWidth: 1)
+                                        }
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(heart.rawValue) 하트")
+                            .accessibilityAddTraits(
+                                selection == heart ? .isSelected : []
+                            )
+                        }
+                    }
+                    .padding(Metric.screenPadding)
+                }
+            }
+            .navigationTitle("하트 고르기")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("완료") { dismiss() }
+                }
+            }
+            .toolbarBackground(.hidden, for: .navigationBar)
         }
     }
 }
