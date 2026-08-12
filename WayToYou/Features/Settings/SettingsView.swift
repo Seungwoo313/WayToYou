@@ -118,6 +118,10 @@ struct SettingsView: View {
         case airport
         case temperature
         case routeHeart
+        #if DEBUG
+        case debugMineCity
+        case debugPartnerCity
+        #endif
 
         var id: String { rawValue }
     }
@@ -130,6 +134,12 @@ struct SettingsView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Metric.xl) {
                         settingsSection
+
+                        #if DEBUG
+                        if store.isDebugSession {
+                            debugCitySection
+                        }
+                        #endif
 
                         if let message = store.connectionMessage {
                             Label(message, systemImage: "exclamationmark.circle.fill")
@@ -243,6 +253,45 @@ struct SettingsView: View {
         guard let airport = store.myProfile?.defaultAirport else { return "선택 필요" }
         return airport.displayCode ?? airport.name
     }
+
+    #if DEBUG
+    private var debugCitySection: some View {
+        VStack(alignment: .leading, spacing: Metric.m) {
+            Label("DEBUG · 도시 테스트", systemImage: "ladybug.fill")
+                .font(.rounded(.footnote, .semibold))
+                .foregroundStyle(.orange)
+                .padding(.leading, Metric.xs)
+
+            VStack(spacing: 0) {
+                settingRow(
+                    title: "내 테스트 도시",
+                    value: store.homeCity.name,
+                    systemImage: "person.fill"
+                ) {
+                    presentedSetting = .debugMineCity
+                }
+
+                Divider().overlay(Palette.hairline)
+
+                settingRow(
+                    title: "상대 테스트 도시",
+                    value: store.partnerCity.name,
+                    systemImage: "person.fill"
+                ) {
+                    presentedSetting = .debugPartnerCity
+                }
+            }
+            .padding(.horizontal, Metric.l)
+            .glassPanel(radius: Metric.cardRadius)
+
+            Text("선택 즉시 홈의 지구본, 거리, 시차와 날씨가 갱신돼요. 서버에는 반영되지 않아요.")
+                .font(.rounded(.caption2))
+                .foregroundStyle(Palette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, Metric.xs)
+        }
+    }
+    #endif
 
     private func settingRow(
         title: String,
@@ -380,6 +429,30 @@ struct SettingsView: View {
             RouteHeartEmojiPicker(selection: $routeHeartEmoji)
                 .presentationDetents([.height(430)])
                 .presentationBackground(Palette.space)
+
+        #if DEBUG
+        case .debugMineCity:
+            RouteCityPicker(
+                title: "내 테스트 도시",
+                prompt: "내 위치를 어디로 바꿀까요?",
+                detail: "선택하면 홈의 내 위치가 즉시 바뀌어요."
+            ) { city in
+                store.setDebugCity(city, for: .mine)
+            }
+            .presentationDetents([.large])
+            .presentationBackground(Palette.space)
+
+        case .debugPartnerCity:
+            RouteCityPicker(
+                title: "상대 테스트 도시",
+                prompt: "상대 위치를 어디로 바꿀까요?",
+                detail: "선택하면 홈의 상대 위치가 즉시 바뀌어요."
+            ) { city in
+                store.setDebugCity(city, for: .partner)
+            }
+            .presentationDetents([.large])
+            .presentationBackground(Palette.space)
+        #endif
         }
     }
 

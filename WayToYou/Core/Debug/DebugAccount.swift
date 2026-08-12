@@ -1,6 +1,43 @@
 #if DEBUG
 import Foundation
 
+/// `simctl launch` 환경변수로 전달한 도시를 앱 모델로 변환한다.
+/// 값이 전달됐는데 형식이 잘못된 경우 잘못된 도시로 캡처하지 않도록 즉시 실패시킨다.
+enum DebugCityLaunchOverride {
+    static let myCity = decodeCity(environmentKey: "WTY_DEBUG_MY_CITY_JSON")
+    static let partnerCity = decodeCity(environmentKey: "WTY_DEBUG_PARTNER_CITY_JSON")
+
+    private struct Payload: Decodable {
+        let id: String?
+        let name: String
+        let country: String
+        let latitude: Double
+        let longitude: Double
+        let timeZoneID: String
+    }
+
+    private static func decodeCity(environmentKey: String) -> RouteCity? {
+        guard let json = ProcessInfo.processInfo.environment[environmentKey] else { return nil }
+        guard let data = json.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(Payload.self, from: data),
+              !payload.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              (-90...90).contains(payload.latitude),
+              (-180...180).contains(payload.longitude),
+              TimeZone(identifier: payload.timeZoneID) != nil else {
+            preconditionFailure("\(environmentKey)의 도시 JSON 형식이 올바르지 않습니다: \(json)")
+        }
+
+        return RouteCity(
+            id: payload.id ?? "debug-\(payload.latitude),\(payload.longitude)",
+            name: payload.name,
+            country: payload.country,
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+            timeZoneID: payload.timeZoneID
+        )
+    }
+}
+
 /// 시뮬레이터 UI 개발용 가상 계정. Release 빌드에는 이 타입 자체가 포함되지 않는다.
 enum DebugAccount: String, CaseIterable {
     case mina

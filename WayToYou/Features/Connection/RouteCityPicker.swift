@@ -2,6 +2,9 @@ import CoreLocation
 import SwiftUI
 
 struct RouteCityPicker: View {
+    let title: String
+    let prompt: String
+    let detail: String
     let onSelect: (RouteCity) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -13,6 +16,18 @@ struct RouteCityPicker: View {
 
     private let searchService = RoutePlaceSearchService()
 
+    init(
+        title: String = "나의 도시",
+        prompt: String = "어디에서 지내고 있나요?",
+        detail: String = "도시는 두 사람의 프로필과 지구본 Route에 사용해요.",
+        onSelect: @escaping (RouteCity) -> Void
+    ) {
+        self.title = title
+        self.prompt = prompt
+        self.detail = detail
+        self.onSelect = onSelect
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -21,10 +36,10 @@ struct RouteCityPicker: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: Metric.xl) {
                         VStack(alignment: .leading, spacing: Metric.s) {
-                            Text("어디에서 지내고 있나요?")
+                            Text(prompt)
                                 .font(.system(.title2, design: .rounded).weight(.bold))
                                 .foregroundStyle(Palette.textPrimary)
-                            Text("도시는 두 사람의 프로필과 지구본 Route에 사용해요.")
+                            Text(detail)
                                 .font(.rounded(.subheadline))
                                 .foregroundStyle(Palette.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -98,7 +113,7 @@ struct RouteCityPicker: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
             }
-            .navigationTitle("나의 도시")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

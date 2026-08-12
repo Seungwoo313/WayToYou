@@ -51,6 +51,9 @@ final class WayToYouStore {
         guard case .connected(let connection) = connectionStatus else { return nil }
         return connection.id
     }
+    #if DEBUG
+    var isDebugSession: Bool { debugAccount != nil }
+    #endif
     private let defaults: UserDefaults
     private let localConnectionService: any ConnectionServicing
     private var backendConnectionService: SupabaseConnectionService?
@@ -126,13 +129,25 @@ final class WayToYouStore {
         self.init(defaults: debugAccount.defaults)
         self.debugAccount = debugAccount
 
-        let profile = debugAccount.profile
-        let partner = debugAccount.partnerProfile
+        var profile = debugAccount.profile
+        var partner = debugAccount.partnerProfile
+        if let city = DebugCityLaunchOverride.myCity {
+            profile.city = city
+        }
+        if let city = DebugCityLaunchOverride.partnerCity {
+            partner.city = city
+        }
         activeUserID = profile.id
         myProfile = profile
         homeCityID = profile.cityID
         partnerCityID = partner.cityID
-        connectionStatus = .connected(debugAccount.connection)
+        var connection = debugAccount.connection
+        connection.members = connection.members.map { member in
+            if member.id == profile.id { return profile }
+            if member.id == partner.id { return partner }
+            return member
+        }
+        connectionStatus = .connected(connection)
         backendIsReady = true
         demoMode = true
         save()
@@ -267,6 +282,40 @@ final class WayToYouStore {
         synchronizeMyProfileIntoConnection()
         save()
     }
+
+    #if DEBUG
+    /// UI 테스트 중 재실행 없이 두 사람의 위치를 바꾼다.
+    /// DEBUG 가상 계정에서만 동작하며 서버에는 어떤 값도 전송하지 않는다.
+    func setDebugCity(_ city: RouteCity, for target: DebugCityTarget) {
+        guard debugAccount != nil,
+              let myProfile,
+              case .connected(var connection) = connectionStatus else { return }
+
+        switch target {
+        case .mine:
+            var updatedProfile = myProfile
+            updatedProfile.city = city
+            self.myProfile = updatedProfile
+            homeCityID = city.id
+            connection.members = connection.members.map { member in
+                member.id == updatedProfile.id ? updatedProfile : member
+            }
+
+        case .partner:
+            guard let partner = connection.partner(for: myProfile.id) else { return }
+            connection.members = connection.members.map { member in
+                guard member.id == partner.id else { return member }
+                var updatedPartner = member
+                updatedPartner.city = city
+                return updatedPartner
+            }
+            partnerCityID = city.id
+        }
+
+        connectionStatus = .connected(connection)
+        save()
+    }
+    #endif
 
     @discardableResult
     func saveProfileToBackend(
