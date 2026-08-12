@@ -291,6 +291,10 @@ struct GlobeMapView: UIViewRepresentable {
             x * other.x + y * other.y + z * other.z
         }
 
+        func negated() -> Self {
+            self * -1
+        }
+
         func normalized() -> Self? {
             let magnitude = magnitude
             guard magnitude > Double.ulpOfOne.squareRoot() else { return nil }
@@ -340,7 +344,12 @@ struct GlobeMapView: UIViewRepresentable {
         let first: CoupleCity
         let second: CoupleCity
 
-        func center(in mapView: MKMapView) -> CLLocationCoordinate2D {
+        struct Placement {
+            let center: CLLocationCoordinate2D
+            let backsideHiddenArcLimit: Double
+        }
+
+        func placement(in mapView: MKMapView) -> Placement {
             let firstVector = SphereVector(
                 latitude: first.latitude,
                 longitude: first.longitude
@@ -380,14 +389,104 @@ struct GlobeMapView: UIViewRepresentable {
             let maximumShift = max(horizonHeadroom - numericalTolerance, 0)
             let proposedShift = routeMidpoint.angularDistance(to: proposedCenter)
 
-            guard proposedShift > maximumShift else {
-                return proposedCenter.coordinate
+            let originalCenter = proposedShift > maximumShift
+                ? routeMidpoint.moved(toward: proposedCenter, by: maximumShift)
+                : proposedCenter
+
+            // 검증된 기존 framing은 그대로 둔다. 다만 준대척 Route가 현재
+            // 시점에서 거의 수평으로 놓일 때는 두 profile canvas가 좌우 화면 밖으로
+            // 밀리고, 중점이 극점 쪽이면 MapKit이 지구를 과도하게 확대한다.
+            // 이 두 조건이 동시에 성립할 때만 동거리 적도 중심을 쓴다.
+            let fallbackThreshold = 165 * Double.pi / 180
+            let routeAxis = routeAxisAngle(
+                at: originalCenter,
+                first: firstVector,
+                second: secondVector
+            )
+            guard routeSpan > fallbackThreshold,
+                  routeAxis < 36 * Double.pi / 180,
+                  let fallbackCenter = equidistantEquatorialCenter(
+                    first: firstVector,
+                    second: secondVector,
+                    preferredHemisphere: routeMidpoint
+                  ) else {
+                return Placement(
+                    center: originalCenter.coordinate,
+                    backsideHiddenArcLimit: 20 * Double.pi / 180
+                )
             }
-            return routeMidpoint.moved(
-                toward: proposedCenter,
-                by: maximumShift
-            ).coordinate
+
+            // 거의 정확한 대척점의 대권 중점이 극점에 걸리면 동거리 중심을
+            // 유지하는 것만으로는 선이 극점 지평선에 붙는다. 이때만 대권 위의
+            // 위도 약 35° 지점으로 이동해 Route가 지구 중앙을 통과하게 한다.
+            let nearExactAntipode = routeSpan > 175 * Double.pi / 180
+            let polarMidpoint = abs(routeMidpoint.coordinate.latitude) > 70
+            if nearExactAntipode, polarMidpoint {
+                return Placement(
+                    center: routeMidpoint.moved(
+                        toward: firstVector,
+                        by: 55 * Double.pi / 180
+                    ).coordinate,
+                    backsideHiddenArcLimit: 70 * Double.pi / 180
+                )
+            }
+
+            // 거의 정확한 대척점에서는 양쪽 도시가 동시에 MapKit의 유한한
+            // 지평선 바로 뒤에 놓일 수 있다. Route 중점 방향으로만 조금
+            // 기울여 경로의 앞면 샘플을 확보하고, 양 끝은 기존 backside
+            // 표시가 서로 다른 지평선 끝에 놓이도록 한다.
+            let routeRevealBias = 20 * Double.pi / 180
+            return Placement(
+                center: fallbackCenter.moved(
+                    toward: routeMidpoint,
+                    by: routeRevealBias
+                ).coordinate,
+                backsideHiddenArcLimit: 40 * Double.pi / 180
+            )
         }
+
+        private func equidistantEquatorialCenter(
+            first: SphereVector,
+            second: SphereVector,
+            preferredHemisphere: SphereVector
+        ) -> SphereVector? {
+            let difference = first - second
+            let horizontalMagnitude = hypot(difference.x, difference.y)
+            guard horizontalMagnitude > Double.ulpOfOne.squareRoot() else { return nil }
+
+            var center = SphereVector(
+                x: -difference.y / horizontalMagnitude,
+                y: difference.x / horizontalMagnitude,
+                z: 0
+            )
+            if center.dot(preferredHemisphere) < 0 {
+                center = center.negated()
+            }
+            return center
+        }
+
+        private func routeAxisAngle(
+            at center: SphereVector,
+            first: SphereVector,
+            second: SphereVector
+        ) -> Double {
+            let coordinate = center.coordinate
+            let latitude = coordinate.latitude * .pi / 180
+            let longitude = coordinate.longitude * .pi / 180
+            let east = SphereVector(
+                x: -sin(longitude),
+                y: cos(longitude),
+                z: 0
+            )
+            let north = SphereVector(
+                x: -sin(latitude) * cos(longitude),
+                y: -sin(latitude) * sin(longitude),
+                z: cos(latitude)
+            )
+            let difference = second - first
+            return atan2(abs(difference.dot(north)), abs(difference.dot(east)))
+        }
+
     }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
@@ -411,6 +510,7 @@ struct GlobeMapView: UIViewRepresentable {
         private var routeOverlay: MKGeodesicPolyline?
         private var routeHeartAnnotation: RouteHeartAnnotation?
         private var requestedFraming: CameraFraming?
+        private var backsideHiddenArcLimit = 20 * Double.pi / 180
         private var needsInitialFraming = false
         private var defersMarkerSyncUntilCameraCommit = false
         private var framingGeneration = 0
@@ -692,9 +792,9 @@ struct GlobeMapView: UIViewRepresentable {
 
                 let endpoint = routeEndpointPresentation(for: marker.id, in: mapView)
                 let nativeView = mapView.view(for: annotation) as? GlobeProfileAnnotationView
-                // 뒷면 표시는 크기와 투명도를 일정하게 유지하고, 실제 도시가
-                // 지평선 뒤로 20° 이상 멀어진 경우에만 완전히 숨긴다.
-                let hiddenArcLimit = 20 * Double.pi / 180
+                // 기본 20° 숨김 정책은 유지하되, 준대척 framing에서만
+                // Placement가 계산한 각도까지 뒷면 방향 표시를 유지한다.
+                let hiddenArcLimit = backsideHiddenArcLimit
                 let representation: MarkerRepresentation
                 if let endpoint, endpoint.isClippedByHorizon {
                     representation = endpoint.hiddenArc < hiddenArcLimit
@@ -1076,7 +1176,26 @@ struct GlobeMapView: UIViewRepresentable {
                     upper = candidate
                 }
             }
-            return (placement(scale: lower).0, lower)
+            let minimumPlacement = placement(scale: lower).0
+            let halfWidth = GlobeProfileAnnotationView.canvasSize.width / 2 * lower
+            let halfCanvasHeight = GlobeProfileAnnotationView.canvasSize.height / 2 * lower
+            let contentBottom = (
+                GlobeProfileAnnotationView.backsideContentHeight
+                    - GlobeProfileAnnotationView.canvasSize.height / 2
+            ) * lower
+            // 최소 표시 크기에서도 화면 밖이라면 카메라를 다시 움직이지 않고
+            // 실제 profile content만 usable bounds 안으로 제한한다.
+            let clampedCenter = CGPoint(
+                x: min(
+                    max(minimumPlacement.x, usableBounds.minX + halfWidth),
+                    usableBounds.maxX - halfWidth
+                ),
+                y: min(
+                    max(minimumPlacement.y, usableBounds.minY + halfCanvasHeight),
+                    usableBounds.maxY - contentBottom
+                )
+            )
+            return (clampedCenter, lower)
         }
 
         func syncSelection(in mapView: MKMapView) {
@@ -1139,7 +1258,9 @@ struct GlobeMapView: UIViewRepresentable {
             camera.pitch = 0
             camera.centerCoordinateDistance *= 1000
             mapView.setCamera(camera, animated: false)
-            mapView.setCenter(requestedFraming.center(in: mapView), animated: false)
+            let placement = requestedFraming.placement(in: mapView)
+            backsideHiddenArcLimit = placement.backsideHiddenArcLimit
+            mapView.setCenter(placement.center, animated: false)
 
             scheduleMarkerPlacement(afterDisplayFrames: 2)
         }
