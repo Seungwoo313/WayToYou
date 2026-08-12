@@ -12,12 +12,11 @@ Device Presence 구현 직전 기준 HEAD: `8367f0a feat: refine globe signal ma
 
 ## 1. 지금 바로 이어서 할 일
 
-> **2026-08-12 업데이트**: Device Presence 구현과 문서가 현재 배터리 기능 커밋에 포함됐고, `20260811223000_device_presence.sql`은 원격 DB에 적용됐다. local/remote migration 7개가 일치하며 dry-run도 최신 상태다. iPhone 17 fixture UI와 두 실기기 빌드·설치·실행을 완료했고, 두 앱 실행 뒤 원격 presence 행 2개로 실제 publish를 확인했다. 공개 API의 배터리 수치가 상태바보다 거칠 수 있어 마커에는 퍼센트를 쓰지 않고 작은 배터리 아이콘만 표시한다. 숫자 제거 최종본도 두 실기기에 다시 설치·실행했다.
-> 남은 Device Presence 작업은 충전 연결·해제, 10분 stale·60분 expired, unknown, 상대 화면의 값 소유자를 통제된 조건에서 확인하는 수동 QA다. clear RPC와 store 경로는 있지만 사용자가 공유를 끄는 설정 UI는 아직 없다.
+> **2026-08-12 업데이트**: Device Presence와 수동 QA를 완료했고, 프로필 도시·기본 배송 공항 분리 migration도 원격 DB에 적용했다. local/remote migration 8개가 일치하며 dry-run도 최신 상태다. 공개 API의 배터리 수치가 상태바보다 거칠 수 있어 마커에는 퍼센트를 쓰지 않고 작은 배터리 아이콘만 표시한다.
 
 도시 중심 프로필 마커, 탭 선택 애니메이션·햅틱, Signal 스티커, 신규 Signal 수신 토스트까지 `8367f0a`에서 완료됐다. 큰 정보 카드와 도시/시간 pill은 시각 검토 후 제거했으므로 복원하지 않는다.
 
-두 도시를 잇는 절제된 Route 선까지 독립적으로 구현했다. 다음 작업은 Device Presence 수동 QA를 마무리한 뒤 **프로필의 도시와 소포의 공항 책임을 분리**하는 것이다.
+Device Presence 수동 QA와 도시 Route 선, 프로필 도시·기본 배송 공항 책임 분리까지 완료했다. 다음 작업은 **소포 작성 시 양쪽 기본 공항을 자동 적용하고 필요할 때만 변경한 뒤 배송 Route 스냅샷으로 저장**하는 것이다.
 
 ### Device Presence 구현 지점
 
@@ -36,14 +35,14 @@ Device Presence 구현 직전 기준 HEAD: `8367f0a feat: refine globe signal ma
 - `supabase/migrations/`
   - partner-only Device Presence migration
 
-### Device Presence 남은 완료 조건
+### Device Presence 완료 조건 — 검증 완료
 
 - 현재 연결 상대 외에는 Device Presence를 읽을 수 없다. anon RPC·직접 SELECT 거부는 확인 완료했다.
 - 배터리 unknown과 오래된 값이 실시간 수치처럼 표시되지 않는다.
 - 상태 갱신이나 마커 선택이 카메라를 바꾸거나 선택 애니메이션을 재실행하지 않는다.
 - iPhone 17 시뮬레이터에서는 unknown/fixture UI만 검증하고, 배터리·햅틱은 두 실기기에서 확인한다.
 - 두 실기기 빌드·설치·실행과 양쪽 publish는 확인 완료했다. 상대 read와 충전 상태 전환을 화면에서 확인한다.
-- migration, 데이터 흐름, UI를 필요하면 분리 커밋한다.
+- migration, 데이터 흐름, UI를 분리해 검증했다.
 
 ## 2. 최신 제품 결정 — 기존 Product Plan보다 우선
 
@@ -51,18 +50,14 @@ Device Presence 구현 직전 기준 HEAD: `8367f0a feat: refine globe signal ma
 
 - 프로필의 위치는 **공항이 아니라 도시**다.
 - 프로필 마커는 사용자가 고른 도시의 대표 중심 좌표에 둔다.
-- 공항은 프로필 설정이나 평상시 홈의 사람 위치가 아니라 **소포를 보낼 때 Route를 정하는 맥락**에서 사용한다.
+- 공항은 사람의 프로필 위치가 아니라 **기본 배송 공항**으로 한 번 저장한다.
+- 소포 작성 시 내 기본 공항과 상대 기본 공항을 자동으로 채우고, 필요할 때만 변경한다. 실제 전송 시 선택값을 배송 Route 스냅샷으로 저장한다.
 - 실시간 위치, 상대 현재 위치, 마지막 위치, 백그라운드 추적은 사용하지 않는다.
 - 사용자가 `현재 위치로 찾기`를 누를 때만 위치 권한을 요청한다.
 - 도시·공항 데이터는 MapKit 검색 결과를 사용하고 운영 코드에 하드코딩 목록을 다시 넣지 않는다.
 - `#if DEBUG`의 ICN/CDG 값은 시뮬레이터 fixture일 뿐 제품 데이터가 아니다.
 
-이 결정 때문에 도시 마커 이후에는 `RouteEndpoint`가 항상 공항을 요구하는 현재 구조를 재검토해야 한다. 바로 큰 모델 마이그레이션부터 하지 말고, 먼저 도시 마커를 완성한 뒤 다음 단계에서 아래 중 하나로 정리한다.
-
-- 프로필에는 `RouteCity`만 저장하고 소포 작성 시 공항을 선택한다.
-- 또는 기존 endpoint를 임시 호환하되, UI와 지구본에서는 도시만 사용하고 소포 흐름을 구현할 때 모델을 분리한다.
-
-기존 사용자 호환은 요구사항이 아니다. 필요하면 서버 스키마와 로컬 모델을 새 방향에 맞춰 단순하게 바꿔도 된다.
+`RouteEndpoint` 묶음은 제거했고 `UserProfile.city`와 `UserProfile.defaultAirport`로 분리했다. 서버도 `city`와 `default_airport` JSONB 컬럼으로 이관했으며 기존 `route_endpoint`와 `city_id`는 제거했다. 프로필 마커와 도시 Route는 `city`만 사용한다.
 
 ## 3. 반드시 유지할 디자인·UX 원칙
 
@@ -111,7 +106,7 @@ Device Presence 구현 직전 기준 HEAD: `8367f0a feat: refine globe signal ma
 | Apple·Google 로그인 UI/클라이언트 | 구현 완료 | 실제 provider 설정과 각 로그인 E2E 재확인 |
 | 기존 세션 복원·Keychain 보안 | 구현 완료 | 정상/삭제된 계정 실기기 재확인 |
 | 커플 초대·연결 | 구현 완료 | 실제 두 계정 연결 E2E 재확인 |
-| MapKit 도시·공항 검색 | 구현 완료 | 최신 결정에 맞춰 도시/공항 책임 분리 필요 |
+| MapKit 도시·공항 검색 | 구현 완료 | 프로필 도시·기본 배송 공항 분리 완료 |
 | 흑백·중성 UI | 반영 완료 | 새 화면에서도 방향 유지 |
 | Heart Burst | 클라이언트·RPC 구현 완료 | 두 실제 계정 수신 애니메이션 E2E 확인 |
 | Signal | RPC·선택 UI·신규 수신 토스트·마커 스티커 구현 완료 | 두 실제 계정 양방향 송수신·만료 E2E 확인 |
@@ -120,8 +115,8 @@ Device Presence 구현 직전 기준 HEAD: `8367f0a feat: refine globe signal ma
 | 프로필 성공 토스트 | 구현 완료 | 실기기 시각·VoiceOver 확인 |
 | DEBUG 시뮬레이터 계정 | 완료 | 서버 실시간 동기화는 의도적으로 없음 |
 | MapKit 지구본 | 위성 지구본·동적 카메라·도시 프로필 마커·선택 애니메이션·Signal 스티커·마커 배터리·도시 Route 선 완료 | 배송 Route와 Gift annotation 미구현 |
-| Device Presence·배터리 | 원격 migration·RPC·monitor·store·배터리 바 적용 완료 | 두 실기기 publish 확인, 충전 전환·freshness 화면 QA 남음 |
-| Parcel/Letter/Keepsakes | 로컬 데모 흐름 존재 | 서버 저장·상대 전송·공항 선택·제품 UX 구현 필요 |
+| Device Presence·배터리 | 완료 | 두 실기기 publish·충전 전환·freshness 화면 QA 완료 |
+| Parcel/Letter/Keepsakes | 로컬 데모 흐름 존재 | 기본 공항 자동 적용·변경·Route 스냅샷·서버 전송 구현 필요 |
 | Polaroid·Voice Tape | 미착수 | Product Plan 후속 단계 |
 | Widget | 미착수 | Signal/Heart App Intent 포함 설계 필요 |
 | 익명 비행기·Shared World | 미착수 | MVP 후반 |
@@ -167,9 +162,10 @@ Device Presence 구현 직전 기준 HEAD: `8367f0a feat: refine globe signal ma
 
 주요 파일:
 
-- `WayToYou/Core/Models/RouteEndpoint.swift`
+- `WayToYou/Core/Models/RoutePlaces.swift`
 - `WayToYou/Services/RoutePlaceSearchService.swift`
-- `WayToYou/Features/Connection/RouteEndpointPicker.swift`
+- `WayToYou/Features/Connection/RouteCityPicker.swift`
+- `WayToYou/Features/Connection/RouteAirportPicker.swift`
 - `WayToYou/Features/Home/GlobeMapView.swift`
 
 ### Heart와 Signal
@@ -219,7 +215,7 @@ supabase db push --dry-run
 
 확인 결과:
 
-- 아래 7개 migration은 local/remote version이 모두 일치한다.
+- 아래 8개 migration은 local/remote version이 모두 일치한다.
 - `db push --dry-run` 결과는 `Remote database is up to date.`다.
 - 현재 추가로 push할 migration은 없다.
 - Device Presence 적용 뒤 원격 테이블과 primary/connection index를 확인했다.
@@ -236,13 +232,14 @@ supabase db push --dry-run
 - `20260811190000_signals.sql`
 - `20260811193000_profile_photos.sql`
 - `20260811223000_device_presence.sql`
+- `20260812132000_profile_city_default_airport.sql`
 
 주의사항:
 
 - `20260811180500_reset_test_users.sql`은 적용 시점에 연결/프로필/Heart 관련 테이블을 비우고 `auth.users`를 삭제하는 일회성 개발 초기화였다.
 - migration 적용 완료는 앱 E2E 완료를 뜻하지 않는다.
 - 실제 Apple/Google 로그인, 두 실제 계정 연결, Heart/Signal 송수신, 상대 프로필 사진 다운로드 권한은 별도로 검증해야 한다.
-- 새 도시/공항 모델 결정을 반영하면 추가 migration이 필요할 수 있다.
+- 프로필 도시·기본 배송 공항 분리 migration은 원격에 적용됐다.
 - 원격 이력이 이상해 보여도 원인을 확인하지 않고 `migration repair`를 실행하지 않는다.
 
 ## 7. DEBUG 시뮬레이터 계정
@@ -304,6 +301,8 @@ xcodebuild \
 
 도시 Route 점선은 iPhone 17 시뮬레이터의 `mina` fixture에서 서울–파리 마커의 흰 점을 정확히 연결하고, 앱을 건드리기 전 선과 두 마커가 함께 나타나는 것을 확인했다. 이후 같은 변경분을 `승우의 iPhone`에 빌드·설치·실행했다.
 
+프로필 도시·기본 배송 공항 분리는 iPhone 17 시뮬레이터의 `우리` 화면에서 `서울 ↔ Paris` 도시와 `ICN ↔ CDG` 기본 배송값이 분리되어 보이는 것을 확인했다. 같은 변경분을 `승우의 iPhone`과 iPhone 14에 빌드·설치·실행했고 두 기기에서 앱 프로세스가 유지되는 것도 확인했다.
+
 시뮬레이터 설치:
 
 ```bash
@@ -350,18 +349,16 @@ iOS 코드를 수정한 작업은 모두 끝낸 뒤 AGENTS 지침에 따라 `승
 
 ## 10. 다음 구현 순서
 
-작업은 아래 순서를 권장한다. Device Presence 구현을 다시 만들지 말고 남은 수동 QA만 마무리한다.
+작업은 아래 순서를 권장한다. Device Presence와 프로필 도시·기본 배송 공항 분리는 다시 만들지 않는다.
 
-1. **Device Presence: 두 화면의 상대 값, 충전 연결·해제, stale/expired/unknown 수동 QA**
-2. 최신 결정에 맞춰 프로필의 도시와 소포의 공항 책임 분리
-3. 소포 작성 시 출발/도착 공항을 MapKit으로 선택하는 UX
-4. 비행 중 Gift annotation과 배송 진행 상태
-5. 실제 두 계정으로 Heart·Signal·프로필 사진 E2E 검증 및 수정
-6. Parcel/Letter/Keepsakes 서버 모델과 상대 전송
-7. Polaroid
-8. Voice Tape
-9. Interactive Widget
-10. 익명 비행기와 Shared World
+1. 소포 작성 시 내·상대 기본 공항 자동 적용, 필요 시 변경, 배송 Route 스냅샷 저장
+2. 비행 중 Gift annotation과 배송 진행 상태
+3. 실제 두 계정으로 Heart·Signal·프로필 사진 E2E 검증 및 수정
+4. Parcel/Letter/Keepsakes 서버 모델과 상대 전송
+5. Polaroid
+6. Voice Tape
+7. Interactive Widget
+8. 익명 비행기와 Shared World
 
 ## 11. 다음 채팅 시작 체크리스트
 
@@ -372,7 +369,7 @@ git log --oneline -12
 sed -n '1,240p' docs/next-session-handoff.md
 ```
 
-그 다음 `WayToYou/Features/Home/GlobeMapView.swift`의 초기 framing/annotation 순서, `ContentView`의 `presence` task, `WayToYouStore`의 연결 전환 초기화를 먼저 읽는다. Device Presence는 이미 원격 적용됐으므로 새 migration을 만들지 말고 수동 QA 결과부터 확인한다.
+그 다음 `WayToYou/Features/Parcels/ParcelComposerSheet.swift`, `RouteAirportPicker.swift`, `WayToYouStore`의 프로필 기본 공항을 먼저 읽는다. 다음 배송 모델은 프로필의 기본 공항 객체를 직접 참조하지 말고 전송 시점의 Route 스냅샷을 복사해 저장한다.
 
 작업 중 지켜야 할 것:
 

@@ -10,7 +10,8 @@
 
 - 기존 사용자는 호환 대상으로 보지 않는다.
 - 도시와 공항은 하드코딩하지 않고 MapKit을 기준으로 조회한다.
-- 프로필 위치는 도시 중심에 두고, 공항은 소포 Route를 정할 때 사용한다.
+- 프로필 위치는 도시 중심에 두고, 공항은 한 번 저장하는 기본 배송값으로 분리한다.
+- 소포는 기본 공항을 자동 적용하고 필요할 때만 바꾼 뒤 해당 배송 Route에 스냅샷으로 남긴다.
 - 위치 권한은 사용자가 `현재 위치로 찾기`를 눌렀을 때만 요청한다.
 - UI 크롬은 화이트·블랙·중성 그레이로 유지한다.
 - 새로운 디자인 토큰 레이어는 추가하지 않는다.
@@ -21,7 +22,7 @@
 | 영역 | 상태 | 비고 |
 | --- | --- | --- |
 | 파일 구조·탭 정보 구조 | 완료 | 코드 반영 완료 |
-| MapKit 도시·공항 검색 | 구현 완료 | 도시 프로필·소포 공항 책임 분리 필요 |
+| MapKit 도시·공항 검색 | 구현 완료 | 프로필 도시·기본 배송 공항 책임 분리 완료 |
 | 화이트·블랙 UI | 완료 | 실기기 검증 완료 |
 | Apple·Google 인증·Keychain | 구현 완료 | 실제 provider·실기기 재검증 대기 |
 | Heart | 구현 완료 | 실제 두 계정 E2E 검증 대기 |
@@ -31,7 +32,7 @@
 | 시뮬레이터 DEBUG 계정 | 완료 | 시뮬레이터 전용 |
 | Supabase CLI | 연결·원격 동기화 완료 | 실제 두 계정 E2E 검증 대기 |
 | MapKit 지구본 | 도시 프로필 마커·동적 카메라·선택 애니메이션·도시 Route 선 완료 | 배송 Route·Gift annotation 미구현 |
-| Device Presence·배터리 | 원격 migration·monitor·마커 배터리 바 적용 완료 | 두 실기기 publish 확인, 충전 전환·freshness 수동 QA 남음 |
+| Device Presence·배터리 | 완료 | 두 실기기 publish·충전 전환·freshness 수동 QA 완료 |
 | Letter·Delivery·Keepsakes | 로컬 데모 존재 | 서버 전송·제품 흐름 미구현 |
 | Widget | 미착수 | 다음 Product Plan 단계 |
 
@@ -43,22 +44,25 @@
 - Product Plan 기준으로 탭을 `홈`, `간직함`, `우리`로 재편했다.
 - Git 브랜치 `codex/product-plan-mvp`에서 작업 중이다.
 
-### MapKit 도시·공항 온보딩 — 완료 · 실기기 검증 완료
+### MapKit 도시·기본 배송 공항 설정 — 구현 완료
 
-- `RouteCity`, `RouteAirport`, `RouteEndpoint`, `CoupleRoute` 모델을 추가했다.
+- `RouteCity`와 `RouteAirport`를 서로 독립적인 값으로 분리했다.
 - MapKit 지오코딩으로 도시를 검색한다.
 - 현재 위치를 한 번 역지오코딩해 도시를 추천한다.
-- 해당 도시를 기준으로 MapKit 공항 POI를 검색한다.
+- 선택한 도시를 기준으로 MapKit 공항 POI를 검색해 기본 배송 공항으로 한 번 저장한다.
 - 공항 이름·위치·식별자를 MapKit 결과에서 사용한다.
 - 사용자가 직접 도시와 공항을 검색할 수 있다.
 - 하드코딩 공항 목록은 사용하지 않는다.
 - 위치 사용 목적을 `Info.plist`에 명시했다.
+- 프로필·지구본은 도시만 사용하고 공항은 배송 기본값으로만 사용한다.
+- `우리` 화면에서 나와 상대의 기본 공항을 확인하고 내 기본 공항을 수정할 수 있다.
 
 주요 파일:
 
-- `WayToYou/Core/Models/RouteEndpoint.swift`
+- `WayToYou/Core/Models/RoutePlaces.swift`
 - `WayToYou/Services/RoutePlaceSearchService.swift`
-- `WayToYou/Features/Connection/RouteEndpointPicker.swift`
+- `WayToYou/Features/Connection/RouteCityPicker.swift`
+- `WayToYou/Features/Connection/RouteAirportPicker.swift`
 - `WayToYou/Features/Connection/ConnectionOnboardingView.swift`
 
 ### UI 방향 — 완료 · 실기기 검증 완료
@@ -192,13 +196,13 @@
 
 검증 결과:
 
-- `supabase db push`로 원격 migration 적용 완료. 이후 `migration list`의 local/remote 7개 version이 일치하고 dry-run은 `Remote database is up to date.`다.
+- `supabase db push`로 원격 migration 적용 완료. 이후 `migration list`의 local/remote 8개 version이 일치하고 dry-run은 `Remote database is up to date.`다.
 - anon role의 partner RPC·clear RPC·테이블 직접 SELECT는 모두 HTTP 401로 거부됐다.
 - iPhone 17 시뮬레이터에서 62% 방전과 87% 충전 fixture UI를 확인했다.
 - `승우의 iPhone`과 iPhone 14에 빌드·설치·실행했다. 두 앱 실행 뒤 원격 `wty_device_presence` 예상 행 수가 2개여서 두 실제 계정의 publish 성공을 확인했다.
 - 숫자를 제거한 최종 배터리 아이콘 UI도 시뮬레이터에서 확인한 뒤 두 실기기에 다시 설치·실행했다.
 
-남은 수동 QA: 두 화면에서 상대 값 소유자가 맞는지 확인하고, 충전 케이블 연결·해제, 10분 stale·60분 expired, unknown 상태를 통제된 조건에서 확인한다. clear RPC와 store 경로는 있으나 사용자가 배터리 공유를 끄는 설정 UI는 아직 없다.
+두 화면의 상대 값, 충전 케이블 연결·해제, freshness와 unknown 처리를 포함한 수동 QA를 완료했다. clear RPC와 store 경로는 있으나 사용자가 배터리 공유를 끄는 설정 UI는 아직 없다.
 
 ## Supabase 상태 — CLI 연결·원격 DB 적용 완료
 
@@ -218,6 +222,7 @@
 - `supabase/migrations/20260811190000_signals.sql`
 - `supabase/migrations/20260811193000_profile_photos.sql`
 - `supabase/migrations/20260811223000_device_presence.sql`
+- `supabase/migrations/20260812132000_profile_city_default_airport.sql`
 - `WayToYou/Services/SupabaseConnectionService.swift`
 
 2026-08-12에 다음 명령으로 원격 상태를 확인했다.
@@ -227,7 +232,7 @@ supabase migration list
 supabase db push --dry-run
 ```
 
-- 7개 로컬 migration이 모두 같은 version으로 원격에 적용돼 있다.
+- 8개 로컬 migration이 모두 같은 version으로 원격에 적용돼 있다.
 - `db push --dry-run` 결과는 `Remote database is up to date.`다.
 - `wty_device_presence` 테이블과 primary/connection index가 원격에 존재한다.
 - linked DB lint 결과는 `No schema errors found`다.
@@ -237,12 +242,11 @@ supabase db push --dry-run
 
 ## 다음 작업 순서 — 대기 및 미착수
 
-1. Device Presence의 충전 전환·freshness·상대 표시 수동 QA 마무리
-2. 프로필에는 도시, 소포 Route에는 공항을 쓰는 최신 방향으로 모델·UI 책임 분리
-3. 프로필 저장·복원과 비공개 상대 사진 표시 end-to-end 검증
-4. 최신 Heart·Signal 흐름을 실제 두 계정에서 통제된 절차로 재검증
-5. Letter·Parcel·Delivery·Archive 서버 흐름 구현
-6. Widget 및 후속 Product Plan 기능 구현
+1. 소포 작성 시 양쪽 기본 공항 자동 적용·필요 시 변경·배송 Route 스냅샷 저장
+2. 프로필 저장·복원과 비공개 상대 사진 표시 end-to-end 검증
+3. 최신 Heart·Signal 흐름을 실제 두 계정에서 통제된 절차로 재검증
+4. Letter·Parcel·Delivery·Archive 서버 흐름 구현
+5. Widget 및 후속 Product Plan 기능 구현
 
 ## 검증 메모
 
@@ -252,9 +256,10 @@ supabase db push --dry-run
 - MapKit 온보딩과 무채색 UI 버전은 실기기에서 확인했다.
 - 최신 Signal·마커 UI는 `승우의 iPhone`과 iPhone 14에 빌드·설치·실행했다. 양방향 송수신·만료를 통제된 절차로 검증하는 작업은 남아 있다.
 - 도시 Route 점선은 iPhone 17 시뮬레이터에서 서울–파리 두 마커를 정확히 연결하고 초기 화면에 즉시 나타나는 것을 확인한 뒤 `승우의 iPhone`에 빌드·설치·실행했다.
+- 프로필 도시·기본 배송 공항 분리는 iPhone 17 시뮬레이터의 `우리` 화면에서 `서울 ↔ Paris`와 `ICN ↔ CDG`가 별도 정보로 표시되는 것을 확인한 뒤 `승우의 iPhone`과 iPhone 14에 빌드·설치·실행했다.
 - 최신 프로필 사진 선택·크롭·업로드 변경분도 다음 실기기 빌드에서 재검증해야 한다.
 - DEBUG 계정 흐름은 시뮬레이터 전용 검증 경로로 문서화했다.
-- 7개 Supabase migration은 원격과 일치하고 dry-run 기준 추가 적용 항목이 없다.
-- 두 실기기 실행 후 원격 Device Presence 행 2개를 확인했다. 충전 전환·freshness의 시간 기반 수동 QA는 남아 있다.
+- 8개 Supabase migration은 원격과 일치하고 dry-run 기준 추가 적용 항목이 없다.
+- 두 실기기 실행 후 원격 Device Presence 행 2개를 확인했고 충전 전환·freshness 수동 QA도 완료했다.
 - 앱 인증 토큰은 iOS Keychain을 사용하며, Keychain은 Supabase DB가 아니라 기기 내부의 보호된 인증 저장소다.
 - Device Presence 구현 직전 원격 기준 HEAD는 `8367f0a`다.

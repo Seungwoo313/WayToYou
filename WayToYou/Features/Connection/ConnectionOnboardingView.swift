@@ -6,8 +6,10 @@ struct ConnectionOnboardingView: View {
     @Bindable var store: WayToYouStore
 
     @State private var draftName: String
-    @State private var draftEndpoint: RouteEndpoint?
-    @State private var isPickingEndpoint = false
+    @State private var draftCity: RouteCity?
+    @State private var draftDefaultAirport: RouteAirport?
+    @State private var isPickingCity = false
+    @State private var isPickingDefaultAirport = false
     @State private var isEditingProfile = false
     @State private var isEnteringCode = false
     @State private var draftAvatarData: Data?
@@ -17,14 +19,17 @@ struct ConnectionOnboardingView: View {
     init(store: WayToYouStore, suggestedName: String? = nil) {
         self.store = store
         _draftName = State(initialValue: store.myProfile?.displayName ?? suggestedName ?? "")
-        _draftEndpoint = State(initialValue: store.myProfile?.endpoint)
+        _draftCity = State(initialValue: store.myProfile?.city)
+        _draftDefaultAirport = State(initialValue: store.myProfile?.defaultAirport)
         _draftAvatarData = State(
             initialValue: store.myProfile.flatMap { store.avatarData(for: $0) }
         )
     }
 
     private var canSaveProfile: Bool {
-        !draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draftEndpoint != nil
+        !draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && draftCity != nil
+            && draftDefaultAirport != nil
     }
 
     private var draftHasAvatar: Bool {
@@ -53,12 +58,24 @@ struct ConnectionOnboardingView: View {
                 .scrollDismissesKeyboard(.interactively)
             }
             .toolbarBackground(.hidden, for: .navigationBar)
-            .sheet(isPresented: $isPickingEndpoint) {
-                RouteEndpointPicker { endpoint in
-                    draftEndpoint = endpoint
+            .sheet(isPresented: $isPickingCity) {
+                RouteCityPicker { city in
+                    if draftCity != city {
+                        draftDefaultAirport = nil
+                    }
+                    draftCity = city
                 }
                 .presentationDetents([.large])
                 .presentationBackground(Palette.space)
+            }
+            .sheet(isPresented: $isPickingDefaultAirport) {
+                if let draftCity {
+                    RouteAirportPicker(city: draftCity) { airport in
+                        draftDefaultAirport = airport
+                    }
+                    .presentationDetents([.large])
+                    .presentationBackground(Palette.space)
+                }
             }
             .sheet(isPresented: $isEnteringCode) {
                 InviteCodeEntrySheet(store: store)
@@ -75,7 +92,7 @@ struct ConnectionOnboardingView: View {
             header(
                 step: "1 / 2",
                 title: "먼저, 나를 알려주세요",
-                detail: "상대에게 보일 사진과 이름, 두 사람의 Route가 시작될 도시와 공항을 설정해요."
+                detail: "상대에게 보일 사진과 이름, 두 사람의 Route가 시작될 도시를 설정해요."
             )
 
             VStack(alignment: .leading, spacing: Metric.l) {
@@ -121,20 +138,20 @@ struct ConnectionOnboardingView: View {
                 }
 
                 VStack(alignment: .leading, spacing: Metric.s) {
-                    Text("도시와 공항")
+                    Text("도시")
                         .font(.rounded(.caption, .semibold))
                         .foregroundStyle(Palette.textTertiary)
 
-                    Button { isPickingEndpoint = true } label: {
+                    Button { isPickingCity = true } label: {
                         HStack(spacing: Metric.m) {
-                            Image(systemName: "airplane.circle.fill")
+                            Image(systemName: "mappin.circle.fill")
                                 .font(.system(size: 24))
                                 .foregroundStyle(Palette.me)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(draftEndpoint?.city.name ?? "도시와 공항 선택")
+                                Text(draftCity?.name ?? "도시 선택")
                                     .font(.rounded(.body, .semibold))
                                     .foregroundStyle(Palette.textPrimary)
-                                Text(draftEndpoint.map { "\($0.airport.name) · \($0.city.country)" }
+                                Text(draftCity.map(\.country)
                                     ?? "현재 위치로 추천받거나 직접 검색할 수 있어요")
                                     .font(.rounded(.caption))
                                     .foregroundStyle(Palette.textTertiary)
@@ -151,6 +168,48 @@ struct ConnectionOnboardingView: View {
                     }
                     .buttonStyle(PressableCard())
                 }
+
+                VStack(alignment: .leading, spacing: Metric.s) {
+                    Text("기본 배송 공항")
+                        .font(.rounded(.caption, .semibold))
+                        .foregroundStyle(Palette.textTertiary)
+
+                    Button { isPickingDefaultAirport = true } label: {
+                        HStack(spacing: Metric.m) {
+                            Image(systemName: "airplane.circle.fill")
+                                .font(.system(size: 24))
+                                .foregroundStyle(Palette.me)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(draftDefaultAirport?.name ?? "공항 선택")
+                                    .font(.rounded(.body, .semibold))
+                                    .foregroundStyle(Palette.textPrimary)
+                                    .lineLimit(1)
+                                Text(
+                                    draftDefaultAirport?.displayCode.map { "공항 코드 \($0)" }
+                                        ?? "소포를 보낼 때 자동으로 사용해요"
+                                )
+                                .font(.rounded(.caption))
+                                .foregroundStyle(Palette.textTertiary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Palette.textTertiary)
+                        }
+                        .padding(.horizontal, Metric.l)
+                        .frame(height: 64)
+                        .background(
+                            Palette.surface,
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        )
+                    }
+                    .buttonStyle(PressableCard())
+                    .disabled(draftCity == nil)
+
+                    Text("한 번 저장해두고 ‘우리’에서 필요할 때 바꿀 수 있어요.")
+                        .font(.rounded(.caption))
+                        .foregroundStyle(Palette.textTertiary)
+                }
             }
             .padding(Metric.l)
             .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metric.cardRadius, style: .continuous))
@@ -161,10 +220,11 @@ struct ConnectionOnboardingView: View {
 
             Button {
                 Task {
-                    guard let draftEndpoint else { return }
+                    guard let draftCity, let draftDefaultAirport else { return }
                     let saved = await store.saveProfileToBackend(
                         displayName: draftName,
-                        endpoint: draftEndpoint
+                        city: draftCity,
+                        defaultAirport: draftDefaultAirport
                     )
                     guard saved else { return }
 
@@ -255,7 +315,8 @@ struct ConnectionOnboardingView: View {
 
             Button {
                 draftName = store.myProfile?.displayName ?? ""
-                draftEndpoint = store.myProfile?.endpoint
+                draftCity = store.myProfile?.city
+                draftDefaultAirport = store.myProfile?.defaultAirport
                 draftAvatarData = store.myProfile.flatMap { store.avatarData(for: $0) }
                 avatarWasEdited = false
                 avatarSelectionMessage = nil
@@ -408,9 +469,6 @@ struct ConnectionOnboardingView: View {
                 Text("\(profile.city.name), \(profile.city.country)")
                     .font(.rounded(.subheadline))
                     .foregroundStyle(Palette.textSecondary)
-                Text(profile.airport.name)
-                    .font(.rounded(.caption))
-                    .foregroundStyle(Palette.textTertiary)
             }
             Spacer()
             Image(systemName: "checkmark.circle.fill")

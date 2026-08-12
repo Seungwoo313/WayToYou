@@ -6,27 +6,29 @@ import Foundation
 struct UserProfile: Identifiable, Codable, Hashable {
     let id: UUID
     var displayName: String
-    var endpoint: RouteEndpoint
+    var city: RouteCity
+    var defaultAirport: RouteAirport
     var avatarPath: String?
     var avatarUpdatedAt: Date?
 
     init(
         id: UUID = UUID(),
         displayName: String,
-        endpoint: RouteEndpoint,
+        city: RouteCity,
+        defaultAirport: RouteAirport,
         avatarPath: String? = nil,
         avatarUpdatedAt: Date? = nil
     ) {
         self.id = id
         self.displayName = displayName
-        self.endpoint = endpoint
+        self.city = city
+        self.defaultAirport = defaultAirport
         self.avatarPath = avatarPath
         self.avatarUpdatedAt = avatarUpdatedAt
     }
 
-    var city: CoupleCity { endpoint.city.coupleCity }
-    var cityID: String { endpoint.city.id }
-    var airport: RouteAirport { endpoint.airport }
+    var mapCity: CoupleCity { city.coupleCity }
+    var cityID: String { city.id }
 }
 
 // MARK: - Device Presence

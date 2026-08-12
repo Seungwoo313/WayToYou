@@ -65,44 +65,40 @@ enum DebugAccount: String, CaseIterable {
     private static let minaProfile = UserProfile(
         id: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
         displayName: "미나",
-        endpoint: RouteEndpoint(
-            city: RouteCity(
-                id: "debug-seoul",
-                name: "서울",
-                country: "대한민국",
-                latitude: 37.5665,
-                longitude: 126.9780,
-                timeZoneID: "Asia/Seoul"
-            ),
-            airport: RouteAirport(
-                id: "debug-icn",
-                name: "인천국제공항",
-                latitude: 37.4602,
-                longitude: 126.4407,
-                code: "ICN"
-            )
+        city: RouteCity(
+            id: "debug-seoul",
+            name: "서울",
+            country: "대한민국",
+            latitude: 37.5665,
+            longitude: 126.9780,
+            timeZoneID: "Asia/Seoul"
+        ),
+        defaultAirport: RouteAirport(
+            id: "debug-icn",
+            name: "인천국제공항",
+            latitude: 37.4602,
+            longitude: 126.4407,
+            code: "ICN"
         )
     )
 
     private static let sofiaProfile = UserProfile(
         id: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!,
         displayName: "Sofia",
-        endpoint: RouteEndpoint(
-            city: RouteCity(
-                id: "debug-paris",
-                name: "Paris",
-                country: "France",
-                latitude: 48.8566,
-                longitude: 2.3522,
-                timeZoneID: "Europe/Paris"
-            ),
-            airport: RouteAirport(
-                id: "debug-cdg",
-                name: "Paris Charles de Gaulle Airport",
-                latitude: 49.0097,
-                longitude: 2.5479,
-                code: "CDG"
-            )
+        city: RouteCity(
+            id: "debug-paris",
+            name: "Paris",
+            country: "France",
+            latitude: 48.8566,
+            longitude: 2.3522,
+            timeZoneID: "Europe/Paris"
+        ),
+        defaultAirport: RouteAirport(
+            id: "debug-cdg",
+            name: "Paris Charles de Gaulle Airport",
+            latitude: 49.0097,
+            longitude: 2.5479,
+            code: "CDG"
         )
     )
 }

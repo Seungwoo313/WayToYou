@@ -4,24 +4,27 @@ import Supabase
 struct RemoteProfile: Decodable {
     let id: UUID
     let displayName: String
-    let endpoint: RouteEndpoint?
+    let city: RouteCity?
+    let defaultAirport: RouteAirport?
     let avatarPath: String?
     let avatarUpdatedAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case id
         case displayName = "display_name"
-        case endpoint = "route_endpoint"
+        case city
+        case defaultAirport = "default_airport"
         case avatarPath = "avatar_path"
         case avatarUpdatedAt = "avatar_updated_at"
     }
 
     var profile: UserProfile? {
-        guard let endpoint else { return nil }
+        guard let city, let defaultAirport else { return nil }
         return UserProfile(
             id: id,
             displayName: displayName,
-            endpoint: endpoint,
+            city: city,
+            defaultAirport: defaultAirport,
             avatarPath: avatarPath,
             avatarUpdatedAt: avatarUpdatedAt
         )
@@ -141,16 +144,25 @@ struct SupabaseConnectionService {
             .value
     }
 
-    func saveProfile(displayName: String, endpoint: RouteEndpoint) async throws -> UserProfile {
+    func saveProfile(
+        displayName: String,
+        city: RouteCity,
+        defaultAirport: RouteAirport
+    ) async throws -> UserProfile {
         struct Parameters: Encodable {
             let p_display_name: String
-            let p_route_endpoint: RouteEndpoint
+            let p_city: RouteCity
+            let p_default_airport: RouteAirport
         }
 
         let remote: RemoteProfile = try await client
             .rpc(
                 "wty_save_profile",
-                params: Parameters(p_display_name: displayName, p_route_endpoint: endpoint)
+                params: Parameters(
+                    p_display_name: displayName,
+                    p_city: city,
+                    p_default_airport: defaultAirport
+                )
             )
             .execute()
             .value

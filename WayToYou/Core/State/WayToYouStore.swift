@@ -36,8 +36,8 @@ final class WayToYouStore {
         }
     }
 
-    var homeCity: CoupleCity { myProfile?.city ?? CoupleCity.city(id: homeCityID) }
-    var partnerCity: CoupleCity { partnerProfile?.city ?? CoupleCity.city(id: partnerCityID) }
+    var homeCity: CoupleCity { myProfile?.mapCity ?? CoupleCity.city(id: homeCityID) }
+    var partnerCity: CoupleCity { partnerProfile?.mapCity ?? CoupleCity.city(id: partnerCityID) }
     var partnerProfile: UserProfile? {
         guard let myProfile,
               case .connected(let connection) = connectionStatus else { return nil }
@@ -51,12 +51,6 @@ final class WayToYouStore {
         guard case .connected(let connection) = connectionStatus else { return nil }
         return connection.id
     }
-    var coupleRoute: CoupleRoute? {
-        guard let mine = myProfile?.endpoint,
-              let partner = partnerProfile?.endpoint else { return nil }
-        return CoupleRoute(mine: mine, partner: partner)
-    }
-
     private let defaults: UserDefaults
     private let localConnectionService: any ConnectionServicing
     private var backendConnectionService: SupabaseConnectionService?
@@ -248,33 +242,47 @@ final class WayToYouStore {
         backendIsReady = true
     }
 
-    func saveProfile(displayName: String, endpoint: RouteEndpoint) {
+    func saveProfile(
+        displayName: String,
+        city: RouteCity,
+        defaultAirport: RouteAirport
+    ) {
         let cleanedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedName.isEmpty else { return }
 
         if var profile = myProfile {
             profile.displayName = cleanedName
-            profile.endpoint = endpoint
+            profile.city = city
+            profile.defaultAirport = defaultAirport
             myProfile = profile
         } else {
             myProfile = UserProfile(
                 id: activeUserID ?? UUID(),
                 displayName: cleanedName,
-                endpoint: endpoint
+                city: city,
+                defaultAirport: defaultAirport
             )
         }
-        homeCityID = endpoint.city.id
+        homeCityID = city.id
         synchronizeMyProfileIntoConnection()
         save()
     }
 
     @discardableResult
-    func saveProfileToBackend(displayName: String, endpoint: RouteEndpoint) async -> Bool {
+    func saveProfileToBackend(
+        displayName: String,
+        city: RouteCity,
+        defaultAirport: RouteAirport
+    ) async -> Bool {
         let cleanedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         #if DEBUG
         if debugAccount != nil {
             guard !cleanedName.isEmpty else { return false }
-            saveProfile(displayName: cleanedName, endpoint: endpoint)
+            saveProfile(
+                displayName: cleanedName,
+                city: city,
+                defaultAirport: defaultAirport
+            )
             return true
         }
         #endif
@@ -287,7 +295,8 @@ final class WayToYouStore {
         do {
             let profile = try await backendConnectionService.saveProfile(
                 displayName: cleanedName,
-                endpoint: endpoint
+                city: city,
+                defaultAirport: defaultAirport
             )
             myProfile = profile
             homeCityID = profile.cityID

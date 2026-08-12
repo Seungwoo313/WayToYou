@@ -9,6 +9,7 @@ struct UsView: View {
     @State private var isProcessingAvatar = false
     @State private var avatarSelectionMessage: String?
     @State private var avatarToastID: UUID?
+    @State private var isPickingDefaultAirport = false
 
     init(store: WayToYouStore, presentedAsSheet: Bool = true) {
         self.store = store
@@ -25,10 +26,46 @@ struct UsView: View {
                         routeSection
 
                         if let me = store.myProfile {
-                            endpointSection(title: "나", profile: me)
+                            profileSection(title: "나", profile: me)
                         }
                         if let partner = store.partnerProfile {
-                            endpointSection(title: "상대", profile: partner)
+                            profileSection(title: "상대", profile: partner)
+                        }
+
+                        if let me = store.myProfile {
+                            section("기본 배송 공항") {
+                                airportRow(
+                                    title: "나",
+                                    airport: me.defaultAirport
+                                )
+
+                                if let partner = store.partnerProfile {
+                                    Divider().overlay(Palette.hairline)
+                                    airportRow(
+                                        title: partner.displayName,
+                                        airport: partner.defaultAirport
+                                    )
+                                }
+
+                                Button {
+                                    isPickingDefaultAirport = true
+                                } label: {
+                                    Label("내 기본 공항 변경", systemImage: "slider.horizontal.3")
+                                        .font(.rounded(.subheadline, .semibold))
+                                        .foregroundStyle(Palette.textPrimary)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 48)
+                                }
+                                .buttonStyle(.glass)
+                                .disabled(store.connectionIsWorking)
+
+                                if let message = store.connectionMessage {
+                                    Label(message, systemImage: "exclamationmark.circle.fill")
+                                        .font(.rounded(.caption, .medium))
+                                        .foregroundStyle(Palette.you)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
                         }
 
                         section("두 사람 사이") {
@@ -102,6 +139,21 @@ struct UsView: View {
             } message: {
                 Text("현재 기기에 저장된 데모 소포와 시그널이 삭제돼요.")
             }
+            .sheet(isPresented: $isPickingDefaultAirport) {
+                if let profile = store.myProfile {
+                    RouteAirportPicker(city: profile.city) { airport in
+                        Task {
+                            await store.saveProfileToBackend(
+                                displayName: profile.displayName,
+                                city: profile.city,
+                                defaultAirport: airport
+                            )
+                        }
+                    }
+                    .presentationDetents([.large])
+                    .presentationBackground(Palette.space)
+                }
+            }
             .task(id: avatarToastID) {
                 guard let toastID = avatarToastID else { return }
 
@@ -122,20 +174,28 @@ struct UsView: View {
 
     private var routeSection: some View {
         VStack(spacing: Metric.l) {
-            Text("YOUR ROUTE")
+            Text("OUR CITIES")
                 .font(.system(.caption, design: .monospaced).weight(.bold))
                 .tracking(2.4)
                 .foregroundStyle(Palette.textTertiary)
 
-            Text(store.coupleRoute?.label ?? "Route를 준비하고 있어요")
+            Text("\(store.homeCity.name) ↔ \(store.partnerCity.name)")
                 .font(.system(.title, design: .rounded).weight(.bold))
                 .foregroundStyle(Palette.textPrimary)
                 .multilineTextAlignment(.center)
 
-            if let route = store.coupleRoute {
-                Text("\(route.mine.city.name)에서 \(route.partner.city.name)까지")
-                    .font(.rounded(.subheadline))
-                    .foregroundStyle(Palette.textSecondary)
+            Text("\(store.homeCity.name)에서 \(store.partnerCity.name)까지")
+                .font(.rounded(.subheadline))
+                .foregroundStyle(Palette.textSecondary)
+
+            if let me = store.myProfile,
+               let partner = store.partnerProfile {
+                Text(
+                    "기본 배송  \(airportLabel(me.defaultAirport)) ↔ "
+                        + airportLabel(partner.defaultAirport)
+                )
+                .font(.system(.caption, design: .monospaced).weight(.semibold))
+                .foregroundStyle(Palette.textTertiary)
             }
         }
         .frame(maxWidth: .infinity)
@@ -145,7 +205,7 @@ struct UsView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func endpointSection(title: String, profile: UserProfile) -> some View {
+    private func profileSection(title: String, profile: UserProfile) -> some View {
         let isMine = profile.id == store.myProfile?.id
         return section(title) {
             HStack(alignment: .top, spacing: Metric.m) {
@@ -185,7 +245,6 @@ struct UsView: View {
                         "\(profile.city.name), \(profile.city.country)",
                         systemImage: "building.2"
                     )
-                    Label(profile.airport.name, systemImage: "airplane")
                 }
                 .font(.rounded(.subheadline))
                 .foregroundStyle(Palette.textSecondary)
@@ -252,5 +311,32 @@ struct UsView: View {
                 .monospacedDigit()
                 .foregroundStyle(Palette.textPrimary)
         }
+    }
+
+    private func airportRow(title: String, airport: RouteAirport) -> some View {
+        HStack(spacing: Metric.m) {
+            Image(systemName: "airplane.departure")
+                .foregroundStyle(Palette.textSecondary)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.rounded(.caption, .medium))
+                    .foregroundStyle(Palette.textTertiary)
+                Text(airport.name)
+                    .font(.rounded(.subheadline, .semibold))
+                    .foregroundStyle(Palette.textPrimary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: Metric.s)
+            if let code = airport.displayCode {
+                Text(code)
+                    .font(.system(.caption, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(Palette.textSecondary)
+            }
+        }
+    }
+
+    private func airportLabel(_ airport: RouteAirport) -> String {
+        airport.displayCode ?? airport.name
     }
 }
