@@ -2,7 +2,7 @@ import MapKit
 import SwiftUI
 
 /// MapKit의 기본 팬, 핀치, 관성을 그대로 사용하는 풀스크린 위성 지구.
-/// 앱이 추가하는 카메라 제약은 극점 투영 붕괴를 막는 위도 ±40° 경계뿐이다.
+/// 앱이 추가하는 카메라 제약은 극점 투영 붕괴를 막는 위도 ±70° 경계뿐이다.
 struct GlobeMapView: UIViewRepresentable {
     let homeCity: CoupleCity
     let partnerCity: CoupleCity
@@ -61,10 +61,10 @@ struct GlobeMapView: UIViewRepresentable {
     private static let latitudeBoundary: MKMapView.CameraBoundary? = {
         let world = MKMapRect.world
         let northY = MKMapPoint(
-            CLLocationCoordinate2D(latitude: 40, longitude: 0)
+            CLLocationCoordinate2D(latitude: 70, longitude: 0)
         ).y
         let southY = MKMapPoint(
-            CLLocationCoordinate2D(latitude: -40, longitude: 0)
+            CLLocationCoordinate2D(latitude: -70, longitude: 0)
         ).y
         return MKMapView.CameraBoundary(
             mapRect: MKMapRect(

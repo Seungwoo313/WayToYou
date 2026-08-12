@@ -25,7 +25,7 @@ struct MemoryLogSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                SpaceBackground().equatable()
+                Palette.spaceDeep.ignoresSafeArea()
 
                 if entries.isEmpty {
                     emptyState

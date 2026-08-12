@@ -30,7 +30,7 @@ struct SettingsSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                SpaceBackground().equatable()
+                Palette.spaceDeep.ignoresSafeArea()
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: Metric.xl) {
@@ -194,7 +194,7 @@ struct SettingsSheet: View {
 }
 
 /// 도시가 16곳이라 스톡 Picker로는 스크롤이 길어진다. 검색을 붙였다.
-private struct CityPickerList: View {
+struct CityPickerList: View {
     let title: String
     @Binding var selection: String
     let excluding: String
@@ -214,7 +214,7 @@ private struct CityPickerList: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                SpaceBackground().equatable()
+                Palette.spaceDeep.ignoresSafeArea()
 
                 ScrollView {
                     LazyVStack(spacing: Metric.s) {

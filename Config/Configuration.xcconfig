@@ -1,0 +1,6 @@
+// Shared build configuration. Local values are loaded only when the optional
+// secrets file exists, so a missing setup fails safely at runtime.
+SUPABASE_PROJECT_HOST =
+SUPABASE_PUBLISHABLE_KEY =
+
+#include? "SupabaseSecrets.xcconfig"

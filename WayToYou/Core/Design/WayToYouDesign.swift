@@ -121,4 +121,3 @@ struct SpaceBackground: View, Equatable {
         .allowsHitTesting(false)
     }
 }
-
