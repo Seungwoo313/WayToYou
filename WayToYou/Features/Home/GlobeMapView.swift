@@ -104,11 +104,12 @@ struct GlobeMapView: UIViewRepresentable {
         mapView.overrideUserInterfaceStyle = .dark
         mapView.backgroundColor = .black
 
-        // 이동, 확대·축소, 회전, 기울기와 관성은 모두 MapKit 기본 동작이다.
+        // 이동, 확대·축소, 회전과 관성은 MapKit 기본 동작을 그대로 쓴다.
+        // 경로와 지평선 마커가 같은 원형 투영을 공유하도록 기울기는 고정한다.
         mapView.isScrollEnabled = true
         mapView.isZoomEnabled = true
         mapView.isRotateEnabled = true
-        mapView.isPitchEnabled = true
+        mapView.isPitchEnabled = false
 
         mapView.showsCompass = false
         mapView.showsScale = false
@@ -193,15 +194,6 @@ struct GlobeMapView: UIViewRepresentable {
 
         var hasVisibleSpan: Bool {
             first.latitude != second.latitude || first.longitude != second.longitude
-        }
-
-        var coordinates: [CLLocationCoordinate2D] {
-            [first, second].map {
-                CLLocationCoordinate2D(
-                    latitude: $0.latitude,
-                    longitude: $0.longitude
-                )
-            }
         }
 
         var midpointCoordinate: CLLocationCoordinate2D {
@@ -425,8 +417,9 @@ struct GlobeMapView: UIViewRepresentable {
         private var markerPlacementGeneration = 0
         private var markerPlacementFramesRemaining = 0
         private var markerPlacementDisplayLink: CADisplayLink?
-        private var markerTrackingDisplayLink: CADisplayLink?
-        private var markerTrackingFramesRemaining: Int?
+        private var backsideRevealFramesRemaining = 0
+        private var backsideRevealDisplayLink: CADisplayLink?
+        private var isUserCameraMotionActive = false
         private var markerOrderResolutionScheduled = false
         private var resolvedMarkerOrderRouteID: String?
         private var isSynchronizingSelection = false
@@ -437,7 +430,27 @@ struct GlobeMapView: UIViewRepresentable {
             GlobeProfileMarker.ID: GlobeProfileMarker
         ] = [:]
         private var backsideMarkerIDs: Set<GlobeProfileMarker.ID> = []
-        private var maximumCameraDistance: CLLocationDistance?
+        private var hiddenMarkerIDs: Set<GlobeProfileMarker.ID> = []
+        private var nativeFadeInMarkerIDs: Set<GlobeProfileMarker.ID> = []
+        private var routeSampleProbeAnnotations: [GlobeProjectionProbeAnnotation] = []
+        private var routeSampleVectors: [SphereVector] = []
+
+        private enum MarkerRepresentation {
+            case native
+            case backside
+            case hidden
+        }
+
+        private static let backsideIndicatorOpacity: CGFloat = 0.84
+
+        private struct RouteEndpointPresentation {
+            let point: CGPoint
+            let outward: CGVector
+            let isClippedByHorizon: Bool
+            /// 숨은 도시에서 경로를 따라 현재 보이는 끝까지 남은 각거리.
+            let hiddenArc: Double
+        }
+
 
         init(
             cameraRouteID: String,
@@ -454,21 +467,27 @@ struct GlobeMapView: UIViewRepresentable {
             mapView.onUsableLayout = { [weak self, weak mapView] in
                 guard let self, let mapView else { return }
                 self.beginInitialFramingIfPossible(in: mapView)
-                self.updateMarkerRepresentations(in: mapView, animated: false)
+                self.updateMarkerRepresentations(in: mapView)
             }
         }
 
         func disconnect() {
             markerPlacementDisplayLink?.invalidate()
             markerPlacementDisplayLink = nil
-            markerTrackingDisplayLink?.invalidate()
-            markerTrackingDisplayLink = nil
-            markerTrackingFramesRemaining = nil
+            backsideRevealDisplayLink?.invalidate()
+            backsideRevealDisplayLink = nil
+            backsideRevealFramesRemaining = 0
+            isUserCameraMotionActive = false
             markerOrderResolutionScheduled = false
+            mapView?.onUsableLayout = nil
             backsideIndicatorsByID.values.forEach { $0.removeFromSuperview() }
             backsideIndicatorsByID.removeAll()
             backsideMarkerSnapshots.removeAll()
             backsideMarkerIDs.removeAll()
+            hiddenMarkerIDs.removeAll()
+            nativeFadeInMarkerIDs.removeAll()
+            routeSampleProbeAnnotations.removeAll()
+            routeSampleVectors.removeAll()
             mapView = nil
         }
 
@@ -499,10 +518,15 @@ struct GlobeMapView: UIViewRepresentable {
             let routeChanged = appliedRoute != latestRoute
 
             if routeChanged {
+                if !routeSampleProbeAnnotations.isEmpty {
+                    mapView.removeAnnotations(routeSampleProbeAnnotations)
+                    routeSampleProbeAnnotations.removeAll(keepingCapacity: true)
+                }
                 if let routeOverlay {
                     mapView.removeOverlay(routeOverlay)
                     self.routeOverlay = nil
                 }
+                routeSampleVectors.removeAll(keepingCapacity: true)
                 if let routeHeartAnnotation {
                     mapView.removeAnnotation(routeHeartAnnotation)
                     self.routeHeartAnnotation = nil
@@ -510,13 +534,46 @@ struct GlobeMapView: UIViewRepresentable {
                 appliedRoute = latestRoute
 
                 if let latestRoute, latestRoute.hasVisibleSpan {
-                    var coordinates = latestRoute.coordinates
+                    var coordinates = [
+                        CLLocationCoordinate2D(
+                            latitude: latestRoute.first.latitude,
+                            longitude: latestRoute.first.longitude
+                        ),
+                        CLLocationCoordinate2D(
+                            latitude: latestRoute.second.latitude,
+                            longitude: latestRoute.second.longitude
+                        )
+                    ]
                     let overlay = MKGeodesicPolyline(
                         coordinates: &coordinates,
                         count: coordinates.count
                     )
                     routeOverlay = overlay
                     mapView.addOverlay(overlay, level: .aboveLabels)
+
+                    let sampleCount = 256
+                    let points = overlay.points()
+                    var sampledIndices: Set<Int> = []
+                    for sample in 0...sampleCount {
+                        let index = Int(
+                            (Double(overlay.pointCount - 1)
+                                * Double(sample) / Double(sampleCount)).rounded()
+                        )
+                        guard sampledIndices.insert(index).inserted else { continue }
+                        let coordinate = points[index].coordinate
+                        routeSampleProbeAnnotations.append(
+                            GlobeProjectionProbeAnnotation(
+                                coordinate: coordinate
+                            )
+                        )
+                        routeSampleVectors.append(
+                            SphereVector(
+                                latitude: coordinate.latitude,
+                                longitude: coordinate.longitude
+                            )
+                        )
+                    }
+                    mapView.addAnnotations(routeSampleProbeAnnotations)
                 }
             }
 
@@ -566,6 +623,8 @@ struct GlobeMapView: UIViewRepresentable {
                     backsideIndicatorsByID.removeValue(forKey: id)?.removeFromSuperview()
                     backsideMarkerSnapshots.removeValue(forKey: id)
                     backsideMarkerIDs.remove(id)
+                    hiddenMarkerIDs.remove(id)
+                    nativeFadeInMarkerIDs.remove(id)
                 }
             }
 
@@ -592,7 +651,7 @@ struct GlobeMapView: UIViewRepresentable {
                 }
             }
 
-            updateMarkerRepresentations(in: mapView, animated: false)
+            updateMarkerRepresentations(in: mapView)
             syncSelection(in: mapView)
             resolveMarkerOrderOnce(in: mapView)
         }
@@ -613,333 +672,356 @@ struct GlobeMapView: UIViewRepresentable {
                 self.activateBacksideMarker(marker.id, indicator: indicator, in: mapView)
             }
             backsideIndicatorsByID[marker.id] = indicator
-            mapView.backsideOverlayView.addSubview(indicator)
+            mapView.presentationOverlayView.addSubview(indicator)
             return indicator
         }
 
         private func updateMarkerRepresentations(
             in mapView: NativeGlobeMapView,
-            animated: Bool
+            fadesInBacksideIndicators: Bool = false
         ) {
             guard !needsInitialFraming,
                   !defersMarkerSyncUntilCameraCommit,
+                  !isUserCameraMotionActive,
                   mapView.bounds.width > 0,
                   mapView.bounds.height > 0 else { return }
-
-            let cameraCenter = SphereVector(
-                latitude: mapView.camera.centerCoordinate.latitude,
-                longitude: mapView.camera.centerCoordinate.longitude
-            )
-            let horizon = GlobeMapView.visibleAngularRadius(in: mapView)
-            // 들어올 때와 나갈 때 경계를 조금 다르게 둬 limb 근처 깜빡임을 막는다.
-            let frontMargin = min(0.25 * Double.pi / 180, horizon * 0.01)
-            let backMargin = min(0.05 * Double.pi / 180, horizon * 0.002)
-            let frontRadius = max(horizon - frontMargin, 0)
-            let backRadius = max(horizon - backMargin, 0)
 
             for marker in latestMarkers {
                 guard let annotation = annotationsByID[marker.id],
                       let indicator = backsideIndicatorsByID[marker.id] else { continue }
 
-                let city = SphereVector(
-                    latitude: marker.city.latitude,
-                    longitude: marker.city.longitude
-                )
-                let distance = cameraCenter.angularDistance(to: city)
+                let endpoint = routeEndpointPresentation(for: marker.id, in: mapView)
                 let nativeView = mapView.view(for: annotation) as? GlobeProfileAnnotationView
-                let nativeIsSafe = nativeView.map {
-                    nativeViewIsSafelyVisible($0, in: mapView)
-                } ?? false
-                let isCurrentlyBackside = backsideMarkerIDs.contains(marker.id)
-                let cameraIsLevel = abs(mapView.camera.pitch) < 1
-
-                let shouldShowBackside: Bool
-                if cameraIsLevel {
-                    if isCurrentlyBackside {
-                        shouldShowBackside = !(distance <= frontRadius && nativeIsSafe)
-                    } else {
-                        shouldShowBackside = distance >= backRadius
-                    }
-                } else if nativeIsSafe {
-                    // 기울어진 카메라는 horizon이 비대칭이므로 실제 렌더링 결과를 우선한다.
-                    shouldShowBackside = false
+                // 뒷면 표시는 크기와 투명도를 일정하게 유지하고, 실제 도시가
+                // 지평선 뒤로 20° 이상 멀어진 경우에만 완전히 숨긴다.
+                let hiddenArcLimit = 20 * Double.pi / 180
+                let representation: MarkerRepresentation
+                if let endpoint, endpoint.isClippedByHorizon {
+                    representation = endpoint.hiddenArc < hiddenArcLimit
+                        ? .backside
+                        : .hidden
+                } else if endpoint != nil {
+                    representation = .native
+                } else if backsideMarkerIDs.contains(marker.id) {
+                    representation = .backside
+                } else if hiddenMarkerIDs.contains(marker.id) {
+                    representation = .hidden
                 } else {
-                    shouldShowBackside = isCurrentlyBackside || distance >= backRadius
+                    representation = .native
                 }
 
-                if shouldShowBackside || isCurrentlyBackside {
+                if let endpoint, representation == .backside {
                     positionBacksideIndicator(
                         indicator,
-                        annotation: annotation,
-                        nativeView: nativeView,
-                        toward: city,
-                        from: cameraCenter,
-                        distanceFromCenter: distance,
-                        handoffRadius: backRadius,
-                        horizon: horizon,
+                        endpoint: endpoint,
                         in: mapView
                     )
                 }
-                setBacksideRepresentation(
-                    shouldShowBackside,
+                setMarkerRepresentation(
+                    representation,
                     for: marker.id,
                     nativeView: nativeView,
                     indicator: indicator,
-                    animated: animated
+                    fadesIn: fadesInBacksideIndicators
                 )
             }
             syncSelection(in: mapView)
         }
 
-        private func nativeViewIsSafelyVisible(
-            _ view: GlobeProfileAnnotationView,
-            in mapView: NativeGlobeMapView
-        ) -> Bool {
-            guard view.superview != nil else { return false }
-            let frame = mapView.convert(view.bounds, from: view)
-            let safeRect = mapView.bounds.inset(by: UIEdgeInsets(
-                top: 4,
-                left: 4,
-                bottom: mapView.layoutMargins.bottom + 4,
-                right: 4
-            ))
-            return frame.minX.isFinite
-                && frame.minY.isFinite
-                && frame.maxX.isFinite
-                && frame.maxY.isFinite
-                && safeRect.contains(frame)
-        }
-
-        private func setBacksideRepresentation(
-            _ showsBackside: Bool,
+        private func setMarkerRepresentation(
+            _ representation: MarkerRepresentation,
             for id: GlobeProfileMarker.ID,
             nativeView: GlobeProfileAnnotationView?,
             indicator: GlobeBacksideIndicatorView,
-            animated: Bool
+            fadesIn: Bool
         ) {
-            let stateChanged = backsideMarkerIDs.contains(id) != showsBackside
-            if showsBackside {
-                backsideMarkerIDs.insert(id)
+            let previousRepresentation: MarkerRepresentation
+            if backsideMarkerIDs.contains(id) {
+                previousRepresentation = .backside
+            } else if hiddenMarkerIDs.contains(id) {
+                previousRepresentation = .hidden
             } else {
-                backsideMarkerIDs.remove(id)
+                previousRepresentation = .native
+            }
+            let stateChanged = previousRepresentation != representation
+
+            backsideMarkerIDs.remove(id)
+            hiddenMarkerIDs.remove(id)
+            if representation == .backside {
+                backsideMarkerIDs.insert(id)
+            } else if representation == .hidden {
+                hiddenMarkerIDs.insert(id)
             }
 
             indicator.setSelected(selection.wrappedValue?.id == id)
-            guard stateChanged else { return }
+            if representation == .hidden, selection.wrappedValue?.id == id {
+                selection.wrappedValue = nil
+            }
+            if stateChanged {
+                indicator.layer.removeAllAnimations()
+                nativeView?.layer.removeAllAnimations()
+            }
 
-            // 두 표현은 전환 직전에 같은 프레임에 놓인다. 애니메이션을 겹치지 않고
-            // 소유권만 즉시 바꾸면 드래그 중에도 위치가 한 프레임도 튀지 않는다.
+            guard representation == .backside else {
+                indicator.layer.removeAllAnimations()
+                indicator.alpha = 0
+                indicator.isHidden = true
+                indicator.isUserInteractionEnabled = false
+                indicator.accessibilityElementsHidden = true
+
+                guard representation == .native else {
+                    nativeFadeInMarkerIDs.remove(id)
+                    nativeView?.alpha = 0
+                    nativeView?.isHidden = true
+                    nativeView?.isEnabled = false
+                    return
+                }
+
+                nativeView?.isHidden = false
+                nativeView?.isEnabled = true
+                guard fadesIn, previousRepresentation != .native else {
+                    nativeView?.alpha = nativeFadeInMarkerIDs.contains(id) ? 0 : 1
+                    return
+                }
+                guard let nativeView else {
+                    nativeFadeInMarkerIDs.insert(id)
+                    return
+                }
+                nativeFadeInMarkerIDs.remove(id)
+                nativeView.alpha = 0
+                UIView.animate(
+                    withDuration: 0.22,
+                    delay: 0,
+                    options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut]
+                ) {
+                    nativeView.alpha = 1
+                }
+                return
+            }
+
+            nativeView?.alpha = 0
+            nativeView?.isHidden = true
+            nativeView?.isEnabled = false
+            nativeFadeInMarkerIDs.remove(id)
+            indicator.isHidden = false
+            indicator.isUserInteractionEnabled = true
+            indicator.accessibilityElementsHidden = false
+
+            guard fadesIn else {
+                indicator.alpha = Self.backsideIndicatorOpacity
+                return
+            }
+
             indicator.layer.removeAllAnimations()
-            nativeView?.layer.removeAllAnimations()
-            indicator.alpha = showsBackside ? 1 : 0
-            indicator.isHidden = !showsBackside
-            nativeView?.alpha = showsBackside ? 0 : 1
-            nativeView?.isHidden = showsBackside
-            nativeView?.isEnabled = !showsBackside
+            indicator.alpha = 0
+            UIView.animate(
+                withDuration: 0.22,
+                delay: 0,
+                options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut]
+            ) {
+                indicator.alpha = Self.backsideIndicatorOpacity
+            }
+        }
+
+        private func beginUserCameraMotion() {
+            backsideRevealDisplayLink?.invalidate()
+            backsideRevealDisplayLink = nil
+            backsideRevealFramesRemaining = 0
+            guard !isUserCameraMotionActive else { return }
+            isUserCameraMotionActive = true
+
+            for id in backsideMarkerIDs {
+                guard let indicator = backsideIndicatorsByID[id] else { continue }
+                indicator.layer.removeAllAnimations()
+                indicator.isUserInteractionEnabled = false
+                indicator.accessibilityElementsHidden = true
+                UIView.animate(
+                    withDuration: 0.14,
+                    delay: 0,
+                    options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut]
+                ) {
+                    indicator.alpha = 0
+                }
+            }
+            nativeFadeInMarkerIDs.removeAll()
+            if let mapView {
+                for annotation in annotationsByID.values {
+                    mapView.view(for: annotation)?.layer.removeAllAnimations()
+                }
+            }
+        }
+
+        private func scheduleBacksideReveal(afterDisplayFrames frameCount: Int) {
+            backsideRevealDisplayLink?.invalidate()
+            backsideRevealFramesRemaining = max(frameCount, 1)
+            let displayLink = CADisplayLink(
+                target: self,
+                selector: #selector(advanceBacksideReveal)
+            )
+            backsideRevealDisplayLink = displayLink
+            displayLink.add(to: .main, forMode: .common)
+        }
+
+        @objc private func advanceBacksideReveal() {
+            guard backsideRevealFramesRemaining > 1 else {
+                backsideRevealDisplayLink?.invalidate()
+                backsideRevealDisplayLink = nil
+                backsideRevealFramesRemaining = 0
+                guard let mapView else { return }
+
+                for id in backsideMarkerIDs {
+                    guard let indicator = backsideIndicatorsByID[id] else { continue }
+                    indicator.layer.removeAllAnimations()
+                    indicator.alpha = 0
+                    indicator.isUserInteractionEnabled = false
+                    indicator.accessibilityElementsHidden = true
+                }
+                isUserCameraMotionActive = false
+                updateMarkerRepresentations(
+                    in: mapView,
+                    fadesInBacksideIndicators: true
+                )
+                return
+            }
+            backsideRevealFramesRemaining -= 1
         }
 
         private func positionBacksideIndicator(
             _ indicator: GlobeBacksideIndicatorView,
-            annotation: GlobeProfileAnnotation,
-            nativeView: GlobeProfileAnnotationView?,
-            toward city: SphereVector,
-            from cameraCenter: SphereVector,
-            distanceFromCenter: Double,
-            handoffRadius: Double,
-            horizon: Double,
+            endpoint: RouteEndpointPresentation,
             in mapView: NativeGlobeMapView
         ) {
-            let cityDistance = cameraCenter.angularDistance(to: city)
-            // 지평선 바로 위 좌표는 MapKit convert가 뒤쪽 값으로 튈 수 있다.
-            // 안전한 앞면 지점을 투영한 뒤 구면 원근식으로 실제 limb까지 확장한다.
-            let probeAngle = min(
-                cityDistance,
-                max(horizon * 0.82, min(5 * .pi / 180, horizon * 0.5))
-            )
-            let probeCoordinate = cameraCenter.moved(toward: city, by: probeAngle).coordinate
-            let fallbackCenter = CGPoint(x: mapView.bounds.midX, y: mapView.bounds.midY)
-            let convertedCenter = mapView.convert(
-                mapView.camera.centerCoordinate,
-                toPointTo: mapView
-            )
-            let mapCenter = convertedCenter.x.isFinite && convertedCenter.y.isFinite
-                ? convertedCenter
-                : fallbackCenter
-            // 실제 대권 경로가 지구 뒤로 사라지는 지평선 교차점.
-            // 도시 방향을 쓰는 것보다 보이는 점선 끝에 정확히 붙는다.
-            let routeEndPoint = routeLimbPoint(
-                for: annotation.id,
-                hiddenCity: city,
-                cameraCenter: cameraCenter,
-                visibleRadius: max(horizon - 0.12 * .pi / 180, 0),
+            let outsidePlacement = outsideMarkerPlacement(
+                at: endpoint.point,
+                dx: endpoint.outward.dx,
+                dy: endpoint.outward.dy,
                 in: mapView
             )
-            var directionPoint = routeEndPoint
-                ?? mapView.convert(probeCoordinate, toPointTo: mapView)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            indicator.center = outsidePlacement.center
+            indicator.setProfileScale(outsidePlacement.scale)
+            CATransaction.commit()
+        }
 
-            if !directionPoint.x.isFinite
-                || !directionPoint.y.isFinite
-                || hypot(directionPoint.x - mapCenter.x, directionPoint.y - mapCenter.y) < 1 {
-                let fallbackProbeAngle = min(
-                    cityDistance,
-                    max(horizon * 0.45, 5 * .pi / 180)
-                )
-                directionPoint = mapView.convert(
-                    cameraCenter.moved(toward: city, by: fallbackProbeAngle).coordinate,
-                    toPointTo: mapView
-                )
+        private func routeEndpointPresentation(
+            for id: GlobeProfileMarker.ID,
+            in mapView: NativeGlobeMapView
+        ) -> RouteEndpointPresentation? {
+            guard routeSampleProbeAnnotations.count > 1,
+                  routeSampleVectors.count == routeSampleProbeAnnotations.count,
+                  let endpointIndex = latestMarkers.firstIndex(where: { $0.id == id }) else {
+                return nil
             }
+            let searchesFromStart = endpointIndex == 0
+            let indices = searchesFromStart
+                ? Array(routeSampleProbeAnnotations.indices)
+                : Array(routeSampleProbeAnnotations.indices.reversed())
+            let visibleBounds = mapView.bounds.insetBy(dx: -8, dy: -8)
+            let cameraCenter = SphereVector(
+                latitude: mapView.camera.centerCoordinate.latitude,
+                longitude: mapView.camera.centerCoordinate.longitude
+            )
+            let horizon = GlobeMapView.visibleAngularRadius(in: mapView)
+            // MapKit은 뒤쪽 annotation view도 잠시 화면 좌표를 가질 수 있다.
+            // 화면 bounds만 검사하면 그 점을 경로 끝으로 오인하므로, 실제 앞면에
+            // 들어온 대권 샘플만 후보로 사용한다.
+            let frontRadius = max(
+                horizon - min(0.04 * Double.pi / 180, horizon * 0.001),
+                0
+            )
+            var endpoint: (index: Int, point: CGPoint, distance: Double)?
+            var neighbor: CGPoint?
 
-            var dx = directionPoint.x - mapCenter.x
-            var dy = directionPoint.y - mapCenter.y
-            let length = hypot(dx, dy)
-            if !length.isFinite || length < 1 {
-                dx = indicator === backsideIndicatorsByID[.mine] ? -1 : 1
-                dy = 0
+            for index in indices {
+                let distance = cameraCenter.angularDistance(to: routeSampleVectors[index])
+                guard distance <= frontRadius else { continue }
+                guard let point = projectionPoint(
+                    for: routeSampleProbeAnnotations[index],
+                    in: mapView
+                ), visibleBounds.contains(point) else { continue }
+                if endpoint == nil {
+                    endpoint = (index, point, distance)
+                } else {
+                    neighbor = point
+                    break
+                }
+            }
+            guard let endpoint else { return nil }
+
+            var dx: CGFloat
+            var dy: CGFloat
+            if let neighbor {
+                dx = endpoint.point.x - neighbor.x
+                dy = endpoint.point.y - neighbor.y
             } else {
+                dx = endpoint.point.x - mapView.bounds.midX
+                dy = endpoint.point.y - mapView.bounds.midY
+            }
+            let length = hypot(dx, dy)
+            if length.isFinite, length > 0.5 {
                 dx /= length
                 dy /= length
+            } else {
+                dx = id == .mine ? -1 : 1
+                dy = 0
             }
 
-            // MapKit이 투영한 실제 limb 거리를 그대로 쓴다. 추정 반지름을 쓰지 않아
-            // 회전·확대 중에도 프로필이 지구 표면과 따로 노는 현상이 없다.
-            let fallbackRimDistance = apparentGlobeRadius(in: mapView)
-            let calculatedRimDistance = projectedHorizonDistance(
-                fromProbeDistance: length,
-                probeAngle: probeAngle,
-                in: mapView
-            ) ?? fallbackRimDistance
-            // MapKit은 뒷면에 가까운 convert 결과를 화면 밖으로 크게 보낼 수 있다.
-            // 실제 globe 크기 범위로만 제한해 방향은 투영값을, 반경은 안정된 silhouette을 따른다.
-            let projectedRimDistance = min(
-                max(calculatedRimDistance, fallbackRimDistance * 0.85),
-                fallbackRimDistance * 1.05
-            )
-            let rimPoint = routeEndPoint ?? CGPoint(
-                x: mapCenter.x + dx * projectedRimDistance,
-                y: mapCenter.y + dy * projectedRimDistance
-            )
-            let outsidePlacement = outsideMarkerPlacement(
-                at: rimPoint,
-                dx: dx,
-                dy: dy,
-                in: mapView
-            )
-
-            let transitionBand = min(6 * Double.pi / 180, max(horizon * 0.1, 1 * .pi / 180))
-            let rawProgress = min(max(
-                (handoffRadius + transitionBand - distanceFromCenter) / transitionBand,
-                0
-            ), 1)
-            let transitionProgress = rawProgress * rawProgress * (3 - 2 * rawProgress)
-            let nativeTarget = nativeMarkerCenter(
-                for: annotation,
-                nativeView: nativeView,
-                in: mapView
-            )
-            indicator.center = CGPoint(
-                x: outsidePlacement.center.x
-                    + (nativeTarget.x - outsidePlacement.center.x) * transitionProgress,
-                y: outsidePlacement.center.y
-                    + (nativeTarget.y - outsidePlacement.center.y) * transitionProgress
-            )
-            let scale = outsidePlacement.scale
-                + (1 - outsidePlacement.scale) * transitionProgress
-            indicator.setProfileScale(scale)
-        }
-
-        private func routeLimbPoint(
-            for id: GlobeProfileMarker.ID,
-            hiddenCity: SphereVector,
-            cameraCenter: SphereVector,
-            visibleRadius: Double,
-            in mapView: NativeGlobeMapView
-        ) -> CGPoint? {
-            guard let otherMarker = latestMarkers.first(where: { $0.id != id }) else {
-                return nil
-            }
-            let otherCity = SphereVector(
-                latitude: otherMarker.city.latitude,
-                longitude: otherMarker.city.longitude
-            )
-            let routeSpan = hiddenCity.angularDistance(to: otherCity)
-            guard routeSpan > Double.ulpOfOne,
-                  cameraCenter.angularDistance(to: hiddenCity) > visibleRadius else {
-                return nil
-            }
-
-            // 뒤면 도시에서 쌍의 도시 쪽으로 점선을 따라가며
-            // 처음 앞면으로 들어오는 지점을 찾는다.
-            let sampleCount = 64
-            var outsideAngle = 0.0
-            for sample in 1...sampleCount {
-                let angle = routeSpan * Double(sample) / Double(sampleCount)
-                let candidate = hiddenCity.moved(toward: otherCity, by: angle)
-                guard cameraCenter.angularDistance(to: candidate) <= visibleRadius else {
-                    outsideAngle = angle
-                    continue
-                }
-
-                var lower = outsideAngle
-                var upper = angle
-                for _ in 0..<18 {
-                    let midpoint = (lower + upper) / 2
-                    let midpointCity = hiddenCity.moved(toward: otherCity, by: midpoint)
-                    if cameraCenter.angularDistance(to: midpointCity) <= visibleRadius {
-                        upper = midpoint
-                    } else {
-                        lower = midpoint
+            let trueEndpointIndex = searchesFromStart
+                ? routeSampleProbeAnnotations.startIndex
+                : routeSampleProbeAnnotations.index(before: routeSampleProbeAnnotations.endIndex)
+            let isClippedByHorizon = endpoint.index != trueEndpointIndex
+            var renderedBoundaryPoint = endpoint.point
+            if isClippedByHorizon, let neighbor {
+                let step = searchesFromStart ? 1 : -1
+                let hiddenIndex = endpoint.index - step
+                if routeSampleVectors.indices.contains(hiddenIndex) {
+                    let hiddenDistance = cameraCenter.angularDistance(
+                        to: routeSampleVectors[hiddenIndex]
+                    )
+                    let insideAmount = max(frontRadius - endpoint.distance, 0)
+                    let outsideAmount = max(hiddenDistance - frontRadius, 0)
+                    let denominator = insideAmount + outsideAmount
+                    if denominator > Double.ulpOfOne {
+                        // 앞/뒤 두 샘플 사이의 실제 horizon 교차 비율을 써서
+                        // 샘플이 바뀌는 프레임에도 위치가 연속적으로 이어진다.
+                        let fraction = CGFloat(insideAmount / denominator)
+                        let segmentLength = hypot(
+                            endpoint.point.x - neighbor.x,
+                            endpoint.point.y - neighbor.y
+                        )
+                        renderedBoundaryPoint.x += dx * segmentLength * fraction
+                        renderedBoundaryPoint.y += dy * segmentLength * fraction
                     }
                 }
-                let point = mapView.convert(
-                    hiddenCity.moved(toward: otherCity, by: upper).coordinate,
-                    toPointTo: mapView
-                )
-                guard point.x.isFinite, point.y.isFinite else { return nil }
-                return point
             }
-            return nil
-        }
-
-        private func projectedHorizonDistance(
-            fromProbeDistance probeDistance: CGFloat,
-            probeAngle: Double,
-            in mapView: NativeGlobeMapView
-        ) -> CGFloat? {
-            guard probeDistance.isFinite,
-                  probeDistance > 1,
-                  probeAngle > 0 else { return nil }
-            let pitch = mapView.camera.pitch * .pi / 180
-            let altitude = mapView.camera.centerCoordinateDistance * max(cos(pitch), 0)
-            let cameraDistance = GlobeMapView.earthRadius + altitude
-            let limbDenominatorSquared = cameraDistance * cameraDistance
-                - GlobeMapView.earthRadius * GlobeMapView.earthRadius
-            guard cameraDistance.isFinite,
-                  limbDenominatorSquared > 0 else { return nil }
-            let denominator = sin(probeAngle) * sqrt(limbDenominatorSquared)
-            guard abs(denominator) > Double.ulpOfOne else { return nil }
-            let scale = (cameraDistance
-                - GlobeMapView.earthRadius * cos(probeAngle)) / denominator
-            guard scale.isFinite, scale > 0 else { return nil }
-            return probeDistance * CGFloat(scale)
-        }
-
-        private func nativeMarkerCenter(
-            for annotation: GlobeProfileAnnotation,
-            nativeView: GlobeProfileAnnotationView?,
-            in mapView: NativeGlobeMapView
-        ) -> CGPoint {
-            if let nativeView, nativeView.superview != nil {
-                let frame = mapView.convert(nativeView.bounds, from: nativeView)
-                if frame.midX.isFinite, frame.midY.isFinite {
-                    return CGPoint(x: frame.midX, y: frame.midY)
-                }
-            }
-            let anchor = mapView.convert(annotation.coordinate, toPointTo: mapView)
-            return CGPoint(
-                x: anchor.x + GlobeProfileAnnotationView.pinCenterOffset.x,
-                y: anchor.y + GlobeProfileAnnotationView.pinCenterOffset.y
+            // MapKit의 선 renderer는 지구 실루엣보다 조금 안쪽에서 대시를 잘라낸다.
+            // 숨은 도시일 때만 실제 화면에서 보이는 마지막 대시 쪽으로 들어간다.
+            let renderedRouteEndInset: CGFloat = isClippedByHorizon ? 16 : 0
+            let renderedEndpoint = CGPoint(
+                x: renderedBoundaryPoint.x - dx * renderedRouteEndInset,
+                y: renderedBoundaryPoint.y - dy * renderedRouteEndInset
             )
+            let hiddenArc = cameraCenter.angularDistance(
+                to: routeSampleVectors[trueEndpointIndex]
+            ) - frontRadius
+            return RouteEndpointPresentation(
+                point: renderedEndpoint,
+                outward: CGVector(dx: dx, dy: dy),
+                isClippedByHorizon: isClippedByHorizon,
+                hiddenArc: max(hiddenArc, 0)
+            )
+        }
+
+        private func projectionPoint(
+            for annotation: GlobeProjectionProbeAnnotation,
+            in mapView: NativeGlobeMapView
+        ) -> CGPoint? {
+            guard let view = mapView.view(for: annotation),
+                  view.superview != nil else { return nil }
+            let frame = mapView.convert(view.bounds, from: view)
+            guard frame.midX.isFinite, frame.midY.isFinite else { return nil }
+            return CGPoint(x: frame.midX, y: frame.midY)
         }
 
         private func outsideMarkerPlacement(
@@ -948,9 +1030,9 @@ struct GlobeMapView: UIViewRepresentable {
             dy: CGFloat,
             in mapView: NativeGlobeMapView
         ) -> (center: CGPoint, scale: CGFloat) {
-            let preferredScale: CGFloat = 0.58
-            let minimumScale: CGFloat = 0.38
-            let gap: CGFloat = 2
+            let preferredScale: CGFloat = 0.78
+            let minimumScale: CGFloat = 0.62
+            let gap: CGFloat = 1
             let usableBounds = mapView.bounds.inset(by: UIEdgeInsets(
                 top: 4,
                 left: 4,
@@ -966,9 +1048,8 @@ struct GlobeMapView: UIViewRepresentable {
                 let minY = -halfCanvasHeight * scale
                 let maxY = (GlobeProfileAnnotationView.backsideContentHeight
                     - halfCanvasHeight) * scale
-                let nearestProjection = min(dx * minX, dx * maxX)
-                    + min(dy * minY, dy * maxY)
-                let distance = -nearestProjection + gap
+                // 캔버스의 빈 여백이 아니라 실제 원형 사진이 점선 끝에 닿는다.
+                let distance = GlobeProfileAnnotationView.avatarRadius * scale + gap
                 let center = CGPoint(
                     x: rimPoint.x + dx * distance,
                     y: rimPoint.y + dy * distance
@@ -998,27 +1079,6 @@ struct GlobeMapView: UIViewRepresentable {
             return (placement(scale: lower).0, lower)
         }
 
-        private func apparentGlobeRadius(in mapView: NativeGlobeMapView) -> CGFloat {
-            let baseRadius = max(min(mapView.bounds.width, mapView.bounds.height) / 2 - 30, 40)
-            guard let maximumCameraDistance,
-                  maximumCameraDistance > 0 else { return baseRadius }
-
-            let pitch = mapView.camera.pitch * .pi / 180
-            let currentAltitude = max(
-                mapView.camera.centerCoordinateDistance * max(cos(pitch), 0),
-                1
-            )
-            let baseAngle = asin(min(GlobeMapView.earthRadius
-                / (GlobeMapView.earthRadius + maximumCameraDistance), 1))
-            let currentAngle = asin(min(GlobeMapView.earthRadius
-                / (GlobeMapView.earthRadius + currentAltitude), 1))
-            guard baseAngle > 0 else { return baseRadius }
-            return min(
-                baseRadius * CGFloat(tan(currentAngle) / tan(baseAngle)),
-                hypot(mapView.bounds.width, mapView.bounds.height)
-            )
-        }
-
         func syncSelection(in mapView: MKMapView) {
             let selectedID = selection.wrappedValue?.id
             for (id, indicator) in backsideIndicatorsByID {
@@ -1026,7 +1086,9 @@ struct GlobeMapView: UIViewRepresentable {
             }
 
             let desiredNativeID = selectedID.flatMap {
-                backsideMarkerIDs.contains($0) ? nil : $0
+                backsideMarkerIDs.contains($0) || hiddenMarkerIDs.contains($0)
+                    ? nil
+                    : $0
             }
             let selectedAnnotation = mapView.selectedAnnotations
                 .compactMap { $0 as? GlobeProfileAnnotation }
@@ -1077,7 +1139,6 @@ struct GlobeMapView: UIViewRepresentable {
             camera.pitch = 0
             camera.centerCoordinateDistance *= 1000
             mapView.setCamera(camera, animated: false)
-            maximumCameraDistance = mapView.camera.centerCoordinateDistance
             mapView.setCenter(requestedFraming.center(in: mapView), animated: false)
 
             scheduleMarkerPlacement(afterDisplayFrames: 2)
@@ -1114,6 +1175,12 @@ struct GlobeMapView: UIViewRepresentable {
             _ mapView: MKMapView,
             viewFor annotation: any MKAnnotation
         ) -> MKAnnotationView? {
+            if annotation is GlobeProjectionProbeAnnotation {
+                return GlobeProjectionProbeView(
+                    annotation: annotation,
+                    reuseIdentifier: nil
+                )
+            }
             if annotation is RouteHeartAnnotation {
                 let view = mapView.dequeueReusableAnnotationView(
                     withIdentifier: RouteHeartAnnotationView.reuseIdentifier,
@@ -1142,10 +1209,21 @@ struct GlobeMapView: UIViewRepresentable {
                 guard let self, let mapView else { return }
                 self.activate(annotation, in: mapView)
             }
-            let showsBackside = backsideMarkerIDs.contains(annotation.id)
-            profileView.alpha = showsBackside ? 0 : 1
-            profileView.isHidden = showsBackside
-            profileView.isEnabled = !showsBackside
+            let hidesNative = backsideMarkerIDs.contains(annotation.id)
+                || hiddenMarkerIDs.contains(annotation.id)
+            let fadesInNative = nativeFadeInMarkerIDs.remove(annotation.id) != nil
+            profileView.alpha = hidesNative || fadesInNative ? 0 : 1
+            profileView.isHidden = hidesNative
+            profileView.isEnabled = !hidesNative
+            if fadesInNative, !hidesNative {
+                UIView.animate(
+                    withDuration: 0.22,
+                    delay: 0,
+                    options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut]
+                ) {
+                    profileView.alpha = 1
+                }
+            }
             return profileView
         }
 
@@ -1273,6 +1351,7 @@ struct GlobeMapView: UIViewRepresentable {
             guard !isSynchronizingSelection,
                   let annotation = view.annotation as? GlobeProfileAnnotation,
                   !backsideMarkerIDs.contains(annotation.id),
+                  !hiddenMarkerIDs.contains(annotation.id),
                   selection.wrappedValue?.id != annotation.id else { return }
             let frame = mapView.convert(view.bounds, from: view)
             selection.wrappedValue = GlobeMarkerSelection(
@@ -1291,6 +1370,7 @@ struct GlobeMapView: UIViewRepresentable {
                 guard let self,
                       let mapView,
                       !self.backsideMarkerIDs.contains(annotation.id),
+                      !self.hiddenMarkerIDs.contains(annotation.id),
                       !mapView.selectedAnnotations.contains(where: {
                           $0 is GlobeProfileAnnotation
                       }),
@@ -1303,11 +1383,7 @@ struct GlobeMapView: UIViewRepresentable {
             _ mapView: MKMapView,
             regionWillChangeAnimated animated: Bool
         ) {
-            startMarkerTracking()
-            let userIsMovingMap = mapView.gestureRecognizers?.contains {
-                $0.state == .began || $0.state == .changed
-            } ?? false
-            guard userIsMovingMap else { return }
+            beginUserCameraMotion()
             selection.wrappedValue = nil
             backsideIndicatorsByID.values.forEach { $0.setSelected(false) }
             mapView.selectedAnnotations.forEach {
@@ -1317,7 +1393,13 @@ struct GlobeMapView: UIViewRepresentable {
 
         func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
             guard let mapView = mapView as? NativeGlobeMapView else { return }
-            updateMarkerRepresentations(in: mapView, animated: true)
+            guard isUserCameraMotionActive else {
+                updateMarkerRepresentations(in: mapView)
+                return
+            }
+            if backsideRevealDisplayLink != nil {
+                backsideRevealFramesRemaining = 3
+            }
         }
 
         func mapView(
@@ -1325,41 +1407,23 @@ struct GlobeMapView: UIViewRepresentable {
             regionDidChangeAnimated animated: Bool
         ) {
             guard let mapView = mapView as? NativeGlobeMapView else { return }
-            updateMarkerRepresentations(in: mapView, animated: false)
-            markerTrackingFramesRemaining = 2
-        }
-
-        private func startMarkerTracking() {
-            markerTrackingFramesRemaining = nil
-            guard markerTrackingDisplayLink == nil else { return }
-            let displayLink = CADisplayLink(
-                target: self,
-                selector: #selector(advanceMarkerTracking)
-            )
-            markerTrackingDisplayLink = displayLink
-            displayLink.add(to: .main, forMode: .common)
-        }
-
-        @objc private func advanceMarkerTracking() {
-            if let mapView {
-                updateMarkerRepresentations(in: mapView, animated: false)
+            guard isUserCameraMotionActive else {
+                updateMarkerRepresentations(in: mapView)
+                return
             }
-            guard let remaining = markerTrackingFramesRemaining else { return }
-            if remaining <= 1 {
-                markerTrackingDisplayLink?.invalidate()
-                markerTrackingDisplayLink = nil
-                markerTrackingFramesRemaining = nil
-            } else {
-                markerTrackingFramesRemaining = remaining - 1
-            }
+            // MapKit이 regionDidChange 뒤에도 마지막 투영값을 몇 프레임 보정하므로,
+            // 최종 위치가 안정된 후 한 번만 뒷면 표시를 드러낸다.
+            scheduleBacksideReveal(afterDisplayFrames: 3)
         }
 
         func mapView(_ mapView: MKMapView, didAdd views: [MKAnnotationView]) {
-            guard views.contains(where: { $0 is GlobeProfileAnnotationView }),
+            guard views.contains(where: {
+                $0 is GlobeProfileAnnotationView || $0 is GlobeProjectionProbeView
+            }),
                   let mapView = mapView as? NativeGlobeMapView else { return }
             DispatchQueue.main.async { [weak self, weak mapView] in
                 guard let self, let mapView else { return }
-                self.updateMarkerRepresentations(in: mapView, animated: true)
+                self.updateMarkerRepresentations(in: mapView)
             }
         }
 
@@ -1485,6 +1549,34 @@ private final class RouteHeartAnnotationView: MKAnnotationView {
     }
 }
 
+private final class GlobeProjectionProbeAnnotation: NSObject, MKAnnotation {
+    @objc dynamic var coordinate: CLLocationCoordinate2D
+
+    init(coordinate: CLLocationCoordinate2D) {
+        self.coordinate = coordinate
+        super.init()
+    }
+
+}
+
+private final class GlobeProjectionProbeView: MKAnnotationView {
+    override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        bounds = CGRect(x: 0, y: 0, width: 1, height: 1)
+        backgroundColor = .clear
+        isOpaque = false
+        alpha = 0.001
+        isEnabled = false
+        displayPriority = .required
+        collisionMode = .none
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
 private final class GlobeProfileAnnotation: NSObject, MKAnnotation {
     let id: GlobeProfileMarker.ID
     @objc dynamic var coordinate: CLLocationCoordinate2D
@@ -1516,12 +1608,13 @@ private final class GlobeProfileAnnotation: NSObject, MKAnnotation {
 private final class GlobeProfileAnnotationView: MKAnnotationView {
     static let reuseIdentifier = "GlobeProfileAnnotationView"
     static let canvasSize = CGSize(width: 68, height: 92)
+    static let avatarRadius: CGFloat = 23
     /// 핀/줄을 숨긴 뒤면 표현의 실제 표시 영역(배터리·아바타·배지).
     static let backsideContentHeight: CGFloat = 77
 
     private enum Layout {
         static let canvasSize = GlobeProfileAnnotationView.canvasSize
-        static let avatarSize: CGFloat = 46
+        static let avatarSize = GlobeProfileAnnotationView.avatarRadius * 2
         /// 배터리 바(17pt) + 여백(5pt) 아래에서 아바타가 시작한다.
         static let avatarTop: CGFloat = 22
         static let batteryHeight: CGFloat = 17
@@ -1800,6 +1893,8 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         self.isBacksidePresentation = isBacksidePresentation
         stemView.isHidden = isBacksidePresentation
         dotView.isHidden = isBacksidePresentation
+        stemView.alpha = 1
+        dotView.alpha = 1
         avatarView.alpha = isBacksidePresentation ? 0.94 : 1
         accessibilityHint = "두 번 탭하면 프로필 상태를 표시합니다"
         updateAccessibilityValue()
@@ -1998,9 +2093,22 @@ private final class GlobeBacksideIndicatorView: UIView {
     func setProfileScale(_ scale: CGFloat) {
         profileView.transform = CGAffineTransform(scaleX: scale, y: scale)
     }
+
 }
 
-private final class PassthroughOverlayView: UIView {
+private final class GlobePresentationOverlayView: UIView {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        clipsToBounds = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let hitView = super.hitTest(point, with: event)
         return hitView === self ? nil : hitView
@@ -2077,16 +2185,13 @@ private enum EmojiStickerRenderer {
 
 final class NativeGlobeMapView: MKMapView {
     var onUsableLayout: (() -> Void)?
-    fileprivate let backsideOverlayView = PassthroughOverlayView()
+    fileprivate let presentationOverlayView = GlobePresentationOverlayView()
 
     private var lastUsableSize = CGSize.zero
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backsideOverlayView.backgroundColor = .clear
-        backsideOverlayView.isOpaque = false
-        backsideOverlayView.clipsToBounds = false
-        addSubview(backsideOverlayView)
+        addSubview(presentationOverlayView)
     }
 
     @available(*, unavailable)
@@ -2105,8 +2210,8 @@ final class NativeGlobeMapView: MKMapView {
             right: 7
         )
 
-        backsideOverlayView.frame = bounds
-        bringSubviewToFront(backsideOverlayView)
+        presentationOverlayView.frame = bounds
+        bringSubviewToFront(presentationOverlayView)
 
         guard bounds.width > 0,
               bounds.height > 0,
