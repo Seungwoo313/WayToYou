@@ -173,6 +173,7 @@ struct ContentView: View {
                 )
             }
         }
+        .statusBarHidden(selectedTab == .home)
     }
 
     private var home: some View {
@@ -189,7 +190,6 @@ struct ContentView: View {
                     weatherByCityID: weatherByCityID
                 )
                     .padding(.horizontal, Metric.screenPadding)
-                    .padding(.top, Metric.s)
                     .padding(.bottom, Metric.m)
 
                 ZStack {

@@ -827,10 +827,9 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         signalBadgeView.addSubview(signalBadgeImageView)
 
         // iOS 상태 바 배터리를 닮은 작은 배터리 바. 아바타 바로 위에 뜬다.
-        batteryPillView.backgroundColor = UIColor.black.withAlphaComponent(0.42)
+        batteryPillView.backgroundColor = .clear
         batteryPillView.layer.cornerRadius = Layout.batteryHeight / 2
-        batteryPillView.layer.borderColor = UIColor.white.withAlphaComponent(0.12).cgColor
-        batteryPillView.layer.borderWidth = 0.5
+        batteryPillView.layer.borderWidth = 0
         batteryPillView.isHidden = true
         addSubview(batteryPillView)
 
@@ -1103,7 +1102,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         } else if display.level <= 20 {
             fillColor = .systemRed
         } else {
-            fillColor = .white
+            fillColor = .systemGreen
         }
         batteryFillView.backgroundColor = fillColor
         batteryPillView.alpha = display.isMuted ? 0.62 : 1
