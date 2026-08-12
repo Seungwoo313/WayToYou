@@ -57,16 +57,37 @@ struct GlobeMarkerSelection: Equatable {
     let anchor: CGPoint
 }
 
+struct GlobeMarkerOrder: Equatable {
+    let left: GlobeProfileMarker.ID
+
+    static let mineOnLeft = GlobeMarkerOrder(left: .mine)
+
+    var right: GlobeProfileMarker.ID {
+        left == .mine ? .partner : .mine
+    }
+
+    func side(for id: GlobeProfileMarker.ID) -> GlobeMarkerSide {
+        id == left ? .left : .right
+    }
+}
+
+enum GlobeMarkerSide: Equatable {
+    case left
+    case right
+}
+
 /// MapKit의 기본 팬, 핀치, 관성을 그대로 사용하는 풀스크린 위성 지구.
 /// 앱이 추가하는 카메라 제약은 극점 투영 붕괴를 막는 위도 ±70° 경계뿐이다.
 struct GlobeMapView: UIViewRepresentable {
     let myMarker: GlobeProfileMarker
     let partnerMarker: GlobeProfileMarker
+    @Binding var markerOrder: GlobeMarkerOrder
     @Binding var selection: GlobeMarkerSelection?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             cameraRouteID: cameraRouteID,
+            markerOrder: $markerOrder,
             selection: $selection
         )
     }
@@ -106,6 +127,7 @@ struct GlobeMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ mapView: NativeGlobeMapView, context: Context) {
+        context.coordinator.markerOrder = $markerOrder
         context.coordinator.selection = $selection
         if context.coordinator.cameraRouteID != cameraRouteID {
             context.coordinator.cameraRouteID = cameraRouteID
@@ -335,7 +357,13 @@ struct GlobeMapView: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
-        var cameraRouteID: String
+        var cameraRouteID: String {
+            didSet {
+                guard cameraRouteID != oldValue else { return }
+                resolvedMarkerOrderRouteID = nil
+            }
+        }
+        var markerOrder: Binding<GlobeMarkerOrder>
         var selection: Binding<GlobeMarkerSelection?>
 
         private weak var mapView: NativeGlobeMapView?
@@ -351,13 +379,17 @@ struct GlobeMapView: UIViewRepresentable {
         private var markerPlacementGeneration = 0
         private var markerPlacementFramesRemaining = 0
         private var markerPlacementDisplayLink: CADisplayLink?
+        private var markerOrderResolutionScheduled = false
+        private var resolvedMarkerOrderRouteID: String?
         private var isSynchronizingSelection = false
 
         init(
             cameraRouteID: String,
+            markerOrder: Binding<GlobeMarkerOrder>,
             selection: Binding<GlobeMarkerSelection?>
         ) {
             self.cameraRouteID = cameraRouteID
+            self.markerOrder = markerOrder
             self.selection = selection
         }
 
@@ -372,6 +404,7 @@ struct GlobeMapView: UIViewRepresentable {
         func disconnect() {
             markerPlacementDisplayLink?.invalidate()
             markerPlacementDisplayLink = nil
+            markerOrderResolutionScheduled = false
             mapView = nil
         }
 
@@ -435,6 +468,7 @@ struct GlobeMapView: UIViewRepresentable {
                 }
             }
             syncSelection(in: mapView)
+            resolveMarkerOrderOnce(in: mapView)
         }
 
         func syncSelection(in mapView: MKMapView) {
@@ -529,7 +563,73 @@ struct GlobeMapView: UIViewRepresentable {
             )
             guard let profileView = view as? GlobeProfileAnnotationView else { return view }
             profileView.configure(with: annotation.marker)
+            profileView.setSide(markerOrder.wrappedValue.side(for: annotation.id))
+            profileView.onActivate = { [weak self, weak mapView] in
+                guard let self, let mapView else { return }
+                self.activate(annotation, in: mapView)
+            }
             return profileView
+        }
+
+        private func resolveMarkerOrderOnce(in mapView: MKMapView) {
+            guard resolvedMarkerOrderRouteID != cameraRouteID,
+                  !markerOrderResolutionScheduled else { return }
+            markerOrderResolutionScheduled = true
+            let routeID = cameraRouteID
+            DispatchQueue.main.async { [weak self, weak mapView] in
+                guard let self else { return }
+                self.markerOrderResolutionScheduled = false
+                guard let mapView,
+                      self.cameraRouteID == routeID else { return }
+                self.resolveMarkerOrder(in: mapView)
+            }
+        }
+
+        private func resolveMarkerOrder(in mapView: MKMapView) {
+            guard resolvedMarkerOrderRouteID != cameraRouteID else { return }
+            guard let mine = annotationsByID[.mine],
+                  let partner = annotationsByID[.partner] else { return }
+
+            let mineX = mapView.convert(mine.coordinate, toPointTo: mapView).x
+            let partnerX = mapView.convert(partner.coordinate, toPointTo: mapView).x
+            let currentOrder = markerOrder.wrappedValue
+            let nextOrder: GlobeMarkerOrder
+            let horizontalGap = partnerX - mineX
+            let crossingTolerance: CGFloat = 8
+            if horizontalGap > crossingTolerance {
+                nextOrder = .mineOnLeft
+            } else if horizontalGap < -crossingTolerance {
+                nextOrder = GlobeMarkerOrder(left: .partner)
+            } else {
+                nextOrder = currentOrder
+            }
+
+            if nextOrder != currentOrder {
+                markerOrder.wrappedValue = nextOrder
+            }
+            resolvedMarkerOrderRouteID = cameraRouteID
+            applyMarkerSides(nextOrder, in: mapView)
+        }
+
+        private func applyMarkerSides(
+            _ order: GlobeMarkerOrder,
+            in mapView: MKMapView
+        ) {
+            for (id, annotation) in annotationsByID {
+                (mapView.view(for: annotation) as? GlobeProfileAnnotationView)?
+                    .setSide(order.side(for: id))
+            }
+        }
+
+        private func activate(
+            _ annotation: GlobeProfileAnnotation,
+            in mapView: MKMapView
+        ) {
+            guard selection.wrappedValue?.id != annotation.id else { return }
+            selection.wrappedValue = GlobeMarkerSelection(
+                id: annotation.id,
+                anchor: mapView.convert(annotation.coordinate, toPointTo: mapView)
+            )
         }
 
         func mapView(
@@ -559,7 +659,6 @@ struct GlobeMapView: UIViewRepresentable {
                 id: annotation.id,
                 anchor: mapView.convert(annotation.coordinate, toPointTo: mapView)
             )
-            UISelectionFeedbackGenerator().selectionChanged()
         }
 
         func mapView(
@@ -591,6 +690,7 @@ struct GlobeMapView: UIViewRepresentable {
                 mapView.deselectAnnotation($0, animated: true)
             }
         }
+
     }
 }
 
@@ -646,12 +746,16 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     private let fallbackLabel = UILabel()
     private let signalBadgeView = UIView()
     private let signalBadgeImageView = UIImageView()
+    private let tapControl = UIControl()
     private let batteryPillView = UIView()
     private let batteryBodyView = UIView()
     private let batteryFillView = UIView()
     private let batteryCapView = UIView()
     private let batteryBoltImageView = UIImageView()
     private var batteryDisplay: GlobeBatteryDisplay?
+    private var markerSide = GlobeMarkerSide.left
+    private let tapFeedback = UIImpactFeedbackGenerator(style: .medium)
+    var onActivate: (() -> Void)?
 
     override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
@@ -756,6 +860,17 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         batteryBoltImageView.isHidden = true
         batteryPillView.addSubview(batteryBoltImageView)
 
+        tapControl.backgroundColor = .clear
+        tapControl.isAccessibilityElement = false
+        tapControl.addTarget(
+            self,
+            action: #selector(handleTouchDown),
+            for: .touchDown
+        )
+        addSubview(tapControl)
+
+        tapFeedback.prepare()
+
     }
 
     @available(*, unavailable)
@@ -778,13 +893,21 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         avatarImageView.frame = avatarView.bounds
         fallbackLabel.frame = avatarView.bounds
         let badgeSize: CGFloat = 24
+        let badgeX: CGFloat
+        switch markerSide {
+        case .left:
+            badgeX = avatarView.frame.minX - badgeSize / 2 + 3
+        case .right:
+            badgeX = avatarView.frame.maxX - badgeSize / 2 - 3
+        }
         signalBadgeView.frame = CGRect(
-            x: avatarView.frame.minX - badgeSize / 2 + 3,
+            x: badgeX,
             y: avatarView.frame.maxY - badgeSize / 2 - 3,
             width: badgeSize,
             height: badgeSize
         )
         signalBadgeImageView.frame = signalBadgeView.bounds
+        tapControl.frame = avatarView.frame.insetBy(dx: -7, dy: -7)
 
         layoutBatteryPill()
 
@@ -848,6 +971,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        onActivate = nil
         avatarView.layer.removeAllAnimations()
         selectionHaloView.layer.removeAllAnimations()
         avatarView.transform = .identity
@@ -864,6 +988,13 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         accessibilityLabel = nil
         accessibilityValue = nil
         accessibilityTraits = [.button]
+        tapFeedback.prepare()
+    }
+
+    func setSide(_ side: GlobeMarkerSide) {
+        guard markerSide != side else { return }
+        markerSide = side
+        setNeedsLayout()
     }
 
     override func setSelected(_ selected: Bool, animated: Bool) {
@@ -873,64 +1004,45 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
 
         accessibilityTraits = selected ? [.button, .selected] : [.button]
         accessibilityValue = selected ? "선택됨" : nil
-        if selected {
-            playSelectionAnimation(animated: animated)
-        } else {
-            clearSelection(animated: animated)
+        if !selected {
+            clearSelection()
         }
     }
 
-    private func playSelectionAnimation(animated: Bool) {
+    @objc private func handleTouchDown() {
+        playTapFeedback()
+        tapFeedback.impactOccurred(intensity: 0.9)
+        tapFeedback.prepare()
+        onActivate?()
+    }
+
+    private func playTapFeedback() {
         avatarView.layer.removeAllAnimations()
         selectionHaloView.layer.removeAllAnimations()
-
-        guard animated, !UIAccessibility.isReduceMotionEnabled else {
-            avatarView.transform = .identity
-            selectionHaloView.transform = CGAffineTransform(scaleX: 1.25, y: 1.25)
-            selectionHaloView.alpha = 0.3
-            return
-        }
-
-        avatarView.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
-        selectionHaloView.transform = CGAffineTransform(scaleX: 0.72, y: 0.72)
+        avatarView.transform = .identity
+        selectionHaloView.transform = .identity
         selectionHaloView.alpha = 0
+
+        guard !UIAccessibility.isReduceMotionEnabled else { return }
+
+        avatarView.transform = CGAffineTransform(scaleX: 0.82, y: 0.82)
         UIView.animate(
-            withDuration: 0.42,
+            withDuration: 0.32,
             delay: 0,
-            usingSpringWithDamping: 0.56,
-            initialSpringVelocity: 0.65,
+            usingSpringWithDamping: 0.5,
+            initialSpringVelocity: 0.8,
             options: [.allowUserInteraction, .beginFromCurrentState]
         ) {
-            self.avatarView.transform = CGAffineTransform(scaleX: 1.08, y: 1.08)
-            self.selectionHaloView.transform = CGAffineTransform(scaleX: 1.28, y: 1.28)
-            self.selectionHaloView.alpha = 0.3
-        } completion: { _ in
-            UIView.animate(
-                withDuration: 0.18,
-                delay: 0,
-                options: [.allowUserInteraction, .beginFromCurrentState]
-            ) {
-                self.avatarView.transform = .identity
-            }
+            self.avatarView.transform = .identity
         }
     }
 
-    private func clearSelection(animated: Bool) {
-        let changes = {
-            self.avatarView.transform = .identity
-            self.selectionHaloView.transform = .identity
-            self.selectionHaloView.alpha = 0
-        }
-        guard animated, !UIAccessibility.isReduceMotionEnabled else {
-            changes()
-            return
-        }
-        UIView.animate(
-            withDuration: 0.18,
-            delay: 0,
-            options: [.allowUserInteraction, .beginFromCurrentState],
-            animations: changes
-        )
+    private func clearSelection() {
+        avatarView.layer.removeAllAnimations()
+        selectionHaloView.layer.removeAllAnimations()
+        avatarView.transform = .identity
+        selectionHaloView.transform = .identity
+        selectionHaloView.alpha = 0
     }
 
     func configure(with marker: GlobeProfileMarker) {
@@ -1110,6 +1222,7 @@ final class NativeGlobeMapView: MKMapView {
             signal: .resting,
             battery: GlobeBatteryDisplay(level: 87, isCharging: true, isMuted: false)
         ),
+        markerOrder: .constant(.mineOnLeft),
         selection: .constant(nil)
     )
     .ignoresSafeArea()

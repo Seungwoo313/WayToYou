@@ -3,7 +3,7 @@ import UIKit
 
 struct ContentView: View {
     private enum AppTab: Hashable {
-        case home, keepsakes, us
+        case home, keepsakes, us, settings
     }
 
     @State private var store: WayToYouStore
@@ -18,7 +18,13 @@ struct ContentView: View {
     @State private var signalToast: SignalEvent?
     @State private var signalToastDismissTask: Task<Void, Never>?
     @State private var selectedGlobeMarker: GlobeMarkerSelection?
+    @State private var globeMarkerOrder = GlobeMarkerOrder.mineOnLeft
+    @State private var weatherByCityID: [String: CurrentCityWeather] = [:]
     @State private var batteryMonitor = DeviceBatteryMonitor()
+    @AppStorage("clockDisplayFormat") private var clockDisplayFormatRawValue =
+        ClockDisplayFormat.twentyFourHour.rawValue
+    @AppStorage("temperatureUnit") private var temperatureUnitRawValue =
+        TemperatureUnit.celsius.rawValue
     @Environment(\.scenePhase) private var scenePhase
     #if DEBUG
     private let debugAccount: DebugAccount?
@@ -68,6 +74,7 @@ struct ContentView: View {
             .task(id: "presence-\(scenePhase)-\(store.activeConnectionID?.uuidString ?? "none")") {
                 await syncDevicePresence()
             }
+            .task(id: weatherSyncID) { await syncWeather() }
             .onChange(of: selectedTab) { _, tab in
                 if tab != .home {
                     selectedGlobeMarker = nil
@@ -157,6 +164,14 @@ struct ContentView: View {
             Tab("우리", systemImage: "person.2", value: AppTab.us) {
                 UsView(store: store, presentedAsSheet: false)
             }
+
+            Tab("설정", systemImage: "gearshape", value: AppTab.settings) {
+                SettingsView(
+                    store: store,
+                    clockFormat: clockDisplayFormatBinding,
+                    temperatureUnit: temperatureUnitBinding
+                )
+            }
         }
     }
 
@@ -165,7 +180,14 @@ struct ContentView: View {
             Color.black.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                ClockRow(store: store, now: now)
+                ClockRow(
+                    store: store,
+                    now: now,
+                    markerOrder: globeMarkerOrder,
+                    clockFormat: clockDisplayFormat,
+                    temperatureUnit: temperatureUnit,
+                    weatherByCityID: weatherByCityID
+                )
                     .padding(.horizontal, Metric.screenPadding)
                     .padding(.top, Metric.s)
                     .padding(.bottom, Metric.m)
@@ -174,6 +196,7 @@ struct ContentView: View {
                     GlobeMapView(
                         myMarker: myGlobeMarker,
                         partnerMarker: partnerGlobeMarker,
+                        markerOrder: $globeMarkerOrder,
                         selection: $selectedGlobeMarker
                     )
 
@@ -231,6 +254,40 @@ struct ContentView: View {
             signal: store.latestSignal(.incoming, at: now)?.signal,
             battery: GlobeBatteryDisplay(presence: store.partnerDevicePresence, at: now)
         )
+    }
+
+    private var clockDisplayFormat: ClockDisplayFormat {
+        ClockDisplayFormat(rawValue: clockDisplayFormatRawValue) ?? .twentyFourHour
+    }
+
+    private var clockDisplayFormatBinding: Binding<ClockDisplayFormat> {
+        Binding(
+            get: { clockDisplayFormat },
+            set: { clockDisplayFormatRawValue = $0.rawValue }
+        )
+    }
+
+    private var temperatureUnit: TemperatureUnit {
+        TemperatureUnit(rawValue: temperatureUnitRawValue) ?? .celsius
+    }
+
+    private var temperatureUnitBinding: Binding<TemperatureUnit> {
+        Binding(
+            get: { temperatureUnit },
+            set: { temperatureUnitRawValue = $0.rawValue }
+        )
+    }
+
+    private var weatherSyncID: String {
+        [
+            String(describing: scenePhase),
+            store.homeCity.id,
+            String(store.homeCity.latitude),
+            String(store.homeCity.longitude),
+            store.partnerCity.id,
+            String(store.partnerCity.latitude),
+            String(store.partnerCity.longitude)
+        ].joined(separator: "|")
     }
 
     // MARK: - Sheets
@@ -396,6 +453,36 @@ struct ContentView: View {
         batteryMonitor.stop()
     }
 
+    private func syncWeather() async {
+        guard scenePhase == .active, store.isConnected else { return }
+
+        while !Task.isCancelled {
+            await refreshWeather()
+            do {
+                try await Task.sleep(for: .seconds(15 * 60))
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func refreshWeather() async {
+        let homeCity = store.homeCity
+        let partnerCity = store.partnerCity
+        let service = WeatherService()
+
+        async let homeResult = try? service.currentWeather(for: homeCity)
+        async let partnerResult = try? service.currentWeather(for: partnerCity)
+        let (homeWeather, partnerWeather) = await (homeResult, partnerResult)
+
+        if let homeWeather {
+            weatherByCityID[homeCity.id] = homeWeather
+        }
+        if let partnerWeather {
+            weatherByCityID[partnerCity.id] = partnerWeather
+        }
+    }
+
     private func emitHeart(incoming: Bool) {
         heartSequence += 1
         let particle = HeartParticle.make(sequence: heartSequence, incoming: incoming)
@@ -441,28 +528,43 @@ struct ContentView: View {
 private struct ClockRow: View {
     let store: WayToYouStore
     let now: Date
+    let markerOrder: GlobeMarkerOrder
+    let clockFormat: ClockDisplayFormat
+    let temperatureUnit: TemperatureUnit
+    let weatherByCityID: [String: CurrentCityWeather]
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            clock(store.homeCity, alignment: .leading)
+            clock(markerOrder.left, edge: .leading)
             Spacer(minLength: Metric.l)
-            clock(store.partnerCity, alignment: .trailing)
+            clock(markerOrder.right, edge: .trailing)
         }
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
     }
 
-    private func clock(_ city: CoupleCity, alignment: HorizontalAlignment) -> some View {
-        VStack(alignment: alignment, spacing: 2) {
+    private func city(for markerID: GlobeProfileMarker.ID) -> CoupleCity {
+        markerID == .mine ? store.homeCity : store.partnerCity
+    }
+
+    private func clock(
+        _ markerID: GlobeProfileMarker.ID,
+        edge: Alignment
+    ) -> some View {
+        let city = city(for: markerID)
+        let timeText = clockFormat.text(for: now, in: city.timeZone)
+        return VStack(alignment: .center, spacing: 2) {
             Text(city.name)
                 .font(.rounded(.caption2, .medium))
                 .foregroundStyle(Palette.textTertiary)
                 .tracking(1.4)
 
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(now.hourMinute(in: city.timeZone))
-                    .font(.system(.title2, design: .rounded).weight(.medium))
+                Text(timeText)
+                    .font(.system(size: 25, weight: .bold, design: .default))
                     .monospacedDigit()
                     .foregroundStyle(Palette.textPrimary)
+                    .contentTransition(.numericText())
+                    .animation(.snappy(duration: 0.38), value: timeText)
 
                 if let offset = dayOffsetLabel(for: city) {
                     Text(offset)
@@ -470,9 +572,55 @@ private struct ClockRow: View {
                         .foregroundStyle(Palette.textTertiary)
                 }
             }
+
+            weatherRow(for: city)
         }
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(maxWidth: .infinity, alignment: edge)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(city.name) \(now.hourMinute(in: city.timeZone))")
+        .accessibilityLabel(clockAccessibilityLabel(for: city, timeText: timeText))
+    }
+
+    private func clockAccessibilityLabel(
+        for city: CoupleCity,
+        timeText: String
+    ) -> String {
+        guard let weather = weatherByCityID[city.id] else {
+            return "\(city.name) \(timeText)"
+        }
+        return "\(city.name) \(timeText), \(weather.conditionDescription), "
+            + temperatureUnit.accessibilityTemperature(
+                fromCelsius: weather.temperatureCelsius
+            )
+    }
+
+    @ViewBuilder
+    private func weatherRow(for city: CoupleCity) -> some View {
+        if let weather = weatherByCityID[city.id] {
+            HStack(spacing: 5) {
+                Image(systemName: weather.symbolName)
+                    .symbolRenderingMode(.multicolor)
+                Text(
+                    temperatureUnit.displayTemperature(
+                        fromCelsius: weather.temperatureCelsius
+                    )
+                )
+                .monospacedDigit()
+                .contentTransition(.numericText())
+                .foregroundStyle(Palette.textSecondary)
+            }
+            .font(.system(size: 14, weight: .medium, design: .rounded))
+            .frame(height: 18)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(
+                "\(weather.conditionDescription), "
+                    + temperatureUnit.accessibilityTemperature(
+                        fromCelsius: weather.temperatureCelsius
+                    )
+            )
+        } else {
+            Color.clear.frame(width: 1, height: 18)
+        }
     }
 
     /// 시차 때문에 날짜가 넘어간 경우에만 붙인다. 같은 날이면 아무것도 안 보인다.
