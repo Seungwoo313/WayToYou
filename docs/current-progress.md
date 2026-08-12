@@ -30,7 +30,7 @@
 | 프로필 사진 Storage | 원격 마이그레이션 적용 완료 | 실제 상대방 권한 검증 대기 |
 | 시뮬레이터 DEBUG 계정 | 완료 | 시뮬레이터 전용 |
 | Supabase CLI | 연결·원격 동기화 완료 | 실제 두 계정 E2E 검증 대기 |
-| MapKit 지구본 | 도시 프로필 마커·동적 카메라·선택 애니메이션 완료 | Route 선 미구현 |
+| MapKit 지구본 | 도시 프로필 마커·동적 카메라·선택 애니메이션·도시 Route 선 완료 | 배송 Route·Gift annotation 미구현 |
 | Device Presence·배터리 | 원격 migration·monitor·마커 배터리 바 적용 완료 | 두 실기기 publish 확인, 충전 전환·freshness 수동 QA 남음 |
 | Letter·Delivery·Keepsakes | 로컬 데모 존재 | 서버 전송·제품 흐름 미구현 |
 | Widget | 미착수 | 다음 Product Plan 단계 |
@@ -74,7 +74,7 @@
 - `24e5d2d feat: add MapKit route onboarding`
 - `d4ca3af style: switch UI chrome to monochrome`
 
-### MapKit 지구본·프로필 마커 — 구현 완료 · Route 미구현
+### MapKit 지구본·프로필 마커·도시 Route — 구현 완료
 
 - 프로필은 공항이 아니라 사용자가 선택한 도시 중심 좌표에 표시한다.
 - 두 도시의 구면 관계와 실제 하단 UI 여백으로 초기 시점을 계산하며 수동 카메라 좌표를 하드코딩하지 않는다.
@@ -83,6 +83,9 @@
 - 마커 탭 시 spring/halo와 selection 햅틱을 재생한다. 지도 제스처 시작 시 선택을 닫으며 카메라는 유지한다.
 - 큰 정보 카드와 도시/시간 pill은 시각 검토 후 제거했다.
 - 이름·사진·Signal 갱신은 annotation view만 갱신하고 카메라 framing key에는 도시 좌표만 포함한다.
+- 두 도시 중심은 `MKGeodesicPolyline`으로 연결해 지구 곡률을 따르는 최단 Route를 표시한다.
+- Route는 얇은 반투명 흰색 점선이며 마커보다 아래에 그린다. 도시가 같으면 선을 표시하지 않는다.
+- 도시가 바뀔 때만 overlay를 교체하며, 이름·사진·Signal·배터리 갱신은 Route와 카메라에 영향을 주지 않는다.
 
 관련 커밋:
 
@@ -235,12 +238,11 @@ supabase db push --dry-run
 ## 다음 작업 순서 — 대기 및 미착수
 
 1. Device Presence의 충전 전환·freshness·상대 표시 수동 QA 마무리
-2. 두 도시를 잇는 절제된 Route 선
-3. 프로필에는 도시, 소포 Route에는 공항을 쓰는 최신 방향으로 모델·UI 책임 분리
-4. 프로필 저장·복원과 비공개 상대 사진 표시 end-to-end 검증
-5. 최신 Heart·Signal 흐름을 실제 두 계정에서 통제된 절차로 재검증
-6. Letter·Parcel·Delivery·Archive 서버 흐름 구현
-7. Widget 및 후속 Product Plan 기능 구현
+2. 프로필에는 도시, 소포 Route에는 공항을 쓰는 최신 방향으로 모델·UI 책임 분리
+3. 프로필 저장·복원과 비공개 상대 사진 표시 end-to-end 검증
+4. 최신 Heart·Signal 흐름을 실제 두 계정에서 통제된 절차로 재검증
+5. Letter·Parcel·Delivery·Archive 서버 흐름 구현
+6. Widget 및 후속 Product Plan 기능 구현
 
 ## 검증 메모
 
@@ -249,6 +251,7 @@ supabase db push --dry-run
 - 변경 후 iOS 작업은 실기기 실행까지 확인한다.
 - MapKit 온보딩과 무채색 UI 버전은 실기기에서 확인했다.
 - 최신 Signal·마커 UI는 `승우의 iPhone`과 iPhone 14에 빌드·설치·실행했다. 양방향 송수신·만료를 통제된 절차로 검증하는 작업은 남아 있다.
+- 도시 Route 점선은 iPhone 17 시뮬레이터에서 서울–파리 두 마커를 정확히 연결하고 초기 화면에 즉시 나타나는 것을 확인한 뒤 `승우의 iPhone`에 빌드·설치·실행했다.
 - 최신 프로필 사진 선택·크롭·업로드 변경분도 다음 실기기 빌드에서 재검증해야 한다.
 - DEBUG 계정 흐름은 시뮬레이터 전용 검증 경로로 문서화했다.
 - 7개 Supabase migration은 원격과 일치하고 dry-run 기준 추가 적용 항목이 없다.

@@ -17,7 +17,7 @@ Device Presence 구현 직전 기준 HEAD: `8367f0a feat: refine globe signal ma
 
 도시 중심 프로필 마커, 탭 선택 애니메이션·햅틱, Signal 스티커, 신규 Signal 수신 토스트까지 `8367f0a`에서 완료됐다. 큰 정보 카드와 도시/시간 pill은 시각 검토 후 제거했으므로 복원하지 않는다.
 
-다음 작업은 Device Presence 수동 QA를 마무리한 뒤 **두 도시를 잇는 절제된 Route 선**을 독립적으로 구현하는 것이다. 배터리 변경과 Route를 같은 커밋에 섞지 않는다.
+두 도시를 잇는 절제된 Route 선까지 독립적으로 구현했다. 다음 작업은 Device Presence 수동 QA를 마무리한 뒤 **프로필의 도시와 소포의 공항 책임을 분리**하는 것이다.
 
 ### Device Presence 구현 지점
 
@@ -119,7 +119,7 @@ Device Presence 구현 직전 기준 HEAD: `8367f0a feat: refine globe signal ma
 | 비공개 프로필 사진 Storage/RLS | 원격 적용 완료 | 실제 연결 상대 다운로드 권한 E2E 확인 |
 | 프로필 성공 토스트 | 구현 완료 | 실기기 시각·VoiceOver 확인 |
 | DEBUG 시뮬레이터 계정 | 완료 | 서버 실시간 동기화는 의도적으로 없음 |
-| MapKit 지구본 | 위성 지구본·동적 카메라·도시 프로필 마커·선택 애니메이션·Signal 스티커·마커 배터리 바 완료 | Route 선이 다음 독립 작업 |
+| MapKit 지구본 | 위성 지구본·동적 카메라·도시 프로필 마커·선택 애니메이션·Signal 스티커·마커 배터리·도시 Route 선 완료 | 배송 Route와 Gift annotation 미구현 |
 | Device Presence·배터리 | 원격 migration·RPC·monitor·store·배터리 바 적용 완료 | 두 실기기 publish 확인, 충전 전환·freshness 화면 QA 남음 |
 | Parcel/Letter/Keepsakes | 로컬 데모 흐름 존재 | 서버 저장·상대 전송·공항 선택·제품 UX 구현 필요 |
 | Polaroid·Voice Tape | 미착수 | Product Plan 후속 단계 |
@@ -162,7 +162,8 @@ Device Presence 구현 직전 기준 HEAD: `8367f0a feat: refine globe signal ma
 - `EmojiStickerRenderer.image(for:pointSize:outlineWidth:)`는 어떤 유니코드 이모지든 기본 15pt로 렌더링하고 결과를 캐시한다. 이모지별 크기 보정은 하지 않는다.
 - 초기 카메라는 수동으로 잡은 좌표나 거리를 하드코딩하지 않는다. 두 도시의 구면 중점, 실제 하단 UI 여백 비율, 최대 축소 상태를 이용해 계산한다.
 - 위도 보정을 적용하되, 준대척 도시 조합에서도 어느 도시도 지구 뒤로 넘어가지 않도록 구면 지평선 여유로 이동량을 제한한다.
-- Route line은 아직 없다.
+- 두 도시 중심은 `MKGeodesicPolyline`으로 연결한다. 얇은 반투명 흰색 점선으로 마커 아래에 표시하며 같은 도시에서는 숨긴다.
+- Route overlay는 도시가 달라질 때만 교체한다. 이름·사진·Signal·배터리 갱신은 Route를 다시 만들거나 카메라 framing을 호출하지 않는다.
 
 주요 파일:
 
@@ -301,6 +302,8 @@ xcodebuild \
 
 도시 프로필 마커 구현은 iPhone 17 시뮬레이터를 완전히 재실행한 뒤 화면을 건드리지 않은 상태에서 두 마커가 즉시 보이는 것까지 확인했다. 흰 외곽선 유니코드 이모지 스티커도 시뮬레이터 화면에서 확인했다. `승우의 iPhone`과 `NXQOEKRJFJCMXM4` iPhone 14에는 `8367f0a`를 빌드·설치·실행했다. 단, 양방향 Signal 만료와 수신 토스트를 통제된 절차로 재검증한 것은 아니므로 E2E 완료로 적지 않는다.
 
+도시 Route 점선은 iPhone 17 시뮬레이터의 `mina` fixture에서 서울–파리 마커의 흰 점을 정확히 연결하고, 앱을 건드리기 전 선과 두 마커가 함께 나타나는 것을 확인했다. 이후 같은 변경분을 `승우의 iPhone`에 빌드·설치·실행했다.
+
 시뮬레이터 설치:
 
 ```bash
@@ -350,16 +353,15 @@ iOS 코드를 수정한 작업은 모두 끝낸 뒤 AGENTS 지침에 따라 `승
 작업은 아래 순서를 권장한다. Device Presence 구현을 다시 만들지 말고 남은 수동 QA만 마무리한다.
 
 1. **Device Presence: 두 화면의 상대 값, 충전 연결·해제, stale/expired/unknown 수동 QA**
-2. 두 도시를 잇는 절제된 Route 선
-3. 최신 결정에 맞춰 프로필의 도시와 소포의 공항 책임 분리
-4. 소포 작성 시 출발/도착 공항을 MapKit으로 선택하는 UX
-5. 비행 중 Gift annotation과 배송 진행 상태
-6. 실제 두 계정으로 Heart·Signal·프로필 사진 E2E 검증 및 수정
-7. Parcel/Letter/Keepsakes 서버 모델과 상대 전송
-8. Polaroid
-9. Voice Tape
-10. Interactive Widget
-11. 익명 비행기와 Shared World
+2. 최신 결정에 맞춰 프로필의 도시와 소포의 공항 책임 분리
+3. 소포 작성 시 출발/도착 공항을 MapKit으로 선택하는 UX
+4. 비행 중 Gift annotation과 배송 진행 상태
+5. 실제 두 계정으로 Heart·Signal·프로필 사진 E2E 검증 및 수정
+6. Parcel/Letter/Keepsakes 서버 모델과 상대 전송
+7. Polaroid
+8. Voice Tape
+9. Interactive Widget
+10. 익명 비행기와 Shared World
 
 ## 11. 다음 채팅 시작 체크리스트
 

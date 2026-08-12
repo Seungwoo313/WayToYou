@@ -97,7 +97,11 @@ struct GlobeMapView: UIViewRepresentable {
 
         context.coordinator.connect(to: mapView)
         context.coordinator.requestInitialFraming(cameraFraming)
-        context.coordinator.sync(markers: markers, in: mapView)
+        context.coordinator.sync(
+            markers: markers,
+            route: cityRoute,
+            in: mapView
+        )
         return mapView
     }
 
@@ -108,8 +112,13 @@ struct GlobeMapView: UIViewRepresentable {
             context.coordinator.requestInitialFraming(cameraFraming)
         }
 
-        // 사진, 이름과 Signal은 annotation에 반영하되 카메라에는 영향을 주지 않는다.
-        context.coordinator.sync(markers: markers, in: mapView)
+        // 사진, 이름, Signal과 배터리는 annotation에만 반영한다.
+        // Route도 도시가 달라질 때만 교체하며 현재 카메라에는 영향을 주지 않는다.
+        context.coordinator.sync(
+            markers: markers,
+            route: cityRoute,
+            in: mapView
+        )
     }
 
     static func dismantleUIView(
@@ -126,15 +135,39 @@ struct GlobeMapView: UIViewRepresentable {
     }
 
     private var cameraRouteID: String {
-        markers.map { marker in
-            let city = marker.city
-            return "\(city.id):\(city.latitude),\(city.longitude)"
-        }
-        .joined(separator: "|")
+        cityRoute.id
     }
 
     private var cameraFraming: CameraFraming {
         CameraFraming(first: myMarker.city, second: partnerMarker.city)
+    }
+
+    private var cityRoute: CityRoute {
+        CityRoute(first: myMarker.city, second: partnerMarker.city)
+    }
+
+    fileprivate struct CityRoute: Equatable {
+        let first: CoupleCity
+        let second: CoupleCity
+
+        var id: String {
+            [first, second]
+                .map { "\($0.id):\($0.latitude),\($0.longitude)" }
+                .joined(separator: "|")
+        }
+
+        var hasVisibleSpan: Bool {
+            first.latitude != second.latitude || first.longitude != second.longitude
+        }
+
+        var coordinates: [CLLocationCoordinate2D] {
+            [first, second].map {
+                CLLocationCoordinate2D(
+                    latitude: $0.latitude,
+                    longitude: $0.longitude
+                )
+            }
+        }
     }
 
     private static let latitudeBoundary: MKMapView.CameraBoundary? = {
@@ -308,6 +341,9 @@ struct GlobeMapView: UIViewRepresentable {
         private weak var mapView: NativeGlobeMapView?
         private var annotationsByID: [GlobeProfileMarker.ID: GlobeProfileAnnotation] = [:]
         private var latestMarkers: [GlobeProfileMarker] = []
+        private var latestRoute: CityRoute?
+        private var appliedRoute: CityRoute?
+        private var routeOverlay: MKGeodesicPolyline?
         private var requestedFraming: CameraFraming?
         private var needsInitialFraming = false
         private var defersMarkerSyncUntilCameraCommit = false
@@ -339,11 +375,41 @@ struct GlobeMapView: UIViewRepresentable {
             mapView = nil
         }
 
-        func sync(markers: [GlobeProfileMarker], in mapView: MKMapView) {
+        fileprivate func sync(
+            markers: [GlobeProfileMarker],
+            route: CityRoute,
+            in mapView: MKMapView
+        ) {
             latestMarkers = markers
+            latestRoute = route
             guard !needsInitialFraming,
                   !defersMarkerSyncUntilCameraCommit else { return }
+            applyLatestMapContent(in: mapView)
+        }
+
+        private func applyLatestMapContent(in mapView: MKMapView) {
+            applyLatestRoute(in: mapView)
             applyLatestMarkers(in: mapView)
+        }
+
+        private func applyLatestRoute(in mapView: MKMapView) {
+            guard appliedRoute != latestRoute else { return }
+
+            if let routeOverlay {
+                mapView.removeOverlay(routeOverlay)
+                self.routeOverlay = nil
+            }
+            appliedRoute = latestRoute
+
+            guard let latestRoute,
+                  latestRoute.hasVisibleSpan else { return }
+            var coordinates = latestRoute.coordinates
+            let overlay = MKGeodesicPolyline(
+                coordinates: &coordinates,
+                count: coordinates.count
+            )
+            routeOverlay = overlay
+            mapView.addOverlay(overlay, level: .aboveLabels)
         }
 
         private func applyLatestMarkers(in mapView: MKMapView) {
@@ -446,7 +512,7 @@ struct GlobeMapView: UIViewRepresentable {
                       framingGeneration == markerPlacementGeneration else { return }
                 defersMarkerSyncUntilCameraCommit = false
                 mapView.layoutIfNeeded()
-                applyLatestMarkers(in: mapView)
+                applyLatestMapContent(in: mapView)
                 return
             }
             markerPlacementFramesRemaining -= 1
@@ -464,6 +530,22 @@ struct GlobeMapView: UIViewRepresentable {
             guard let profileView = view as? GlobeProfileAnnotationView else { return view }
             profileView.configure(with: annotation.marker)
             return profileView
+        }
+
+        func mapView(
+            _ mapView: MKMapView,
+            rendererFor overlay: any MKOverlay
+        ) -> MKOverlayRenderer {
+            guard let route = overlay as? MKGeodesicPolyline else {
+                return MKOverlayRenderer(overlay: overlay)
+            }
+            let renderer = MKPolylineRenderer(polyline: route)
+            renderer.strokeColor = UIColor.white.withAlphaComponent(0.7)
+            renderer.lineWidth = 1.35
+            renderer.lineCap = .round
+            renderer.lineJoin = .round
+            renderer.lineDashPattern = [4, 5]
+            return renderer
         }
 
         func mapView(
