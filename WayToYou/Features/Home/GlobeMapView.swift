@@ -216,6 +216,7 @@ struct GlobeMapView: UIViewRepresentable {
             return (firstVector + secondVector).normalized()?.coordinate
                 ?? firstVector.stablePerpendicular().coordinate
         }
+
     }
 
     private static let latitudeBoundary: MKMapView.CameraBoundary? = {
@@ -247,6 +248,21 @@ struct GlobeMapView: UIViewRepresentable {
 
         guard hypot(x, y) > .ulpOfOne else { return first }
         return atan2(y, x) * 180 / .pi
+    }
+
+    /// MapKit 지구본은 유한한 카메라 거리 때문에 한 번에 반구 전체를 보여주지 못한다.
+    /// 프로필 좌표가 limb에 걸리면 annotation view 전체가 제거될 수 있어 여백도 둔다.
+    private static let earthRadius: CLLocationDistance = 6_378_137
+    private static func visibleAngularRadius(in mapView: MKMapView) -> Double {
+        let camera = mapView.camera
+        let pitch = camera.pitch * .pi / 180
+        let effectiveAltitude = camera.centerCoordinateDistance * max(cos(pitch), 0)
+        guard effectiveAltitude.isFinite, effectiveAltitude > 0 else {
+            return .pi / 2
+        }
+
+        let ratio = earthRadius / (earthRadius + effectiveAltitude)
+        return acos(min(max(ratio, 0), 1))
     }
 
     private struct SphereVector {
@@ -365,8 +381,8 @@ struct GlobeMapView: UIViewRepresentable {
                 longitude: visualLongitude
             )
 
-            // 사용자가 잡은 여백 기반 구도를 우선하되, 지구의 뒷면으로 도시가 넘어가지는 않게 한다.
-            // 구면 중점에서 두 도시까지의 각도에 남은 지평선 여유만큼만 시점을 이동한다.
+            // 원래의 시각적 중심을 유지하되 어느 도시도 이론적인 앞 반구를 넘지 않게 한다.
+            // 실제 MapKit 지평선보다 먼 도시는 별도의 뒷면 방향 표시가 담당한다.
             let numericalTolerance = Double.ulpOfOne.squareRoot()
             let horizonHeadroom = max(.pi / 2 - routeSpan / 2, 0)
             let maximumShift = max(horizonHeadroom - numericalTolerance, 0)
@@ -409,9 +425,19 @@ struct GlobeMapView: UIViewRepresentable {
         private var markerPlacementGeneration = 0
         private var markerPlacementFramesRemaining = 0
         private var markerPlacementDisplayLink: CADisplayLink?
+        private var markerTrackingDisplayLink: CADisplayLink?
+        private var markerTrackingFramesRemaining: Int?
         private var markerOrderResolutionScheduled = false
         private var resolvedMarkerOrderRouteID: String?
         private var isSynchronizingSelection = false
+        private var backsideIndicatorsByID: [
+            GlobeProfileMarker.ID: GlobeBacksideIndicatorView
+        ] = [:]
+        private var backsideMarkerSnapshots: [
+            GlobeProfileMarker.ID: GlobeProfileMarker
+        ] = [:]
+        private var backsideMarkerIDs: Set<GlobeProfileMarker.ID> = []
+        private var maximumCameraDistance: CLLocationDistance?
 
         init(
             cameraRouteID: String,
@@ -428,13 +454,21 @@ struct GlobeMapView: UIViewRepresentable {
             mapView.onUsableLayout = { [weak self, weak mapView] in
                 guard let self, let mapView else { return }
                 self.beginInitialFramingIfPossible(in: mapView)
+                self.updateMarkerRepresentations(in: mapView, animated: false)
             }
         }
 
         func disconnect() {
             markerPlacementDisplayLink?.invalidate()
             markerPlacementDisplayLink = nil
+            markerTrackingDisplayLink?.invalidate()
+            markerTrackingDisplayLink = nil
+            markerTrackingFramesRemaining = nil
             markerOrderResolutionScheduled = false
+            backsideIndicatorsByID.values.forEach { $0.removeFromSuperview() }
+            backsideIndicatorsByID.removeAll()
+            backsideMarkerSnapshots.removeAll()
+            backsideMarkerIDs.removeAll()
             mapView = nil
         }
 
@@ -444,7 +478,7 @@ struct GlobeMapView: UIViewRepresentable {
             showsRouteHeart: Bool,
             animatesRouteHeart: Bool,
             routeHeartEmoji: String,
-            in mapView: MKMapView
+            in mapView: NativeGlobeMapView
         ) {
             latestMarkers = markers
             latestRoute = route
@@ -456,7 +490,7 @@ struct GlobeMapView: UIViewRepresentable {
             applyLatestMapContent(in: mapView)
         }
 
-        private func applyLatestMapContent(in mapView: MKMapView) {
+        private func applyLatestMapContent(in mapView: NativeGlobeMapView) {
             applyLatestRoute(in: mapView)
             applyLatestMarkers(in: mapView)
         }
@@ -520,37 +554,484 @@ struct GlobeMapView: UIViewRepresentable {
             mapView.addAnnotation(annotation)
         }
 
-        private func applyLatestMarkers(in mapView: MKMapView) {
+        private func applyLatestMarkers(in mapView: NativeGlobeMapView) {
             let markers = latestMarkers
             let desiredIDs = Set(markers.map(\.id))
             let removedIDs = annotationsByID.keys.filter { !desiredIDs.contains($0) }
             let removedAnnotations = removedIDs.compactMap { annotationsByID[$0] }
             if !removedAnnotations.isEmpty {
                 mapView.removeAnnotations(removedAnnotations)
-                removedIDs.forEach { annotationsByID.removeValue(forKey: $0) }
+                for id in removedIDs {
+                    annotationsByID.removeValue(forKey: id)
+                    backsideIndicatorsByID.removeValue(forKey: id)?.removeFromSuperview()
+                    backsideMarkerSnapshots.removeValue(forKey: id)
+                    backsideMarkerIDs.remove(id)
+                }
             }
 
             for marker in markers {
+                let markerChanged: Bool
                 if let annotation = annotationsByID[marker.id] {
-                    guard annotation.marker != marker else { continue }
-                    annotation.apply(marker)
-                    (mapView.view(for: annotation) as? GlobeProfileAnnotationView)?
-                        .configure(with: marker)
+                    markerChanged = annotation.marker != marker
+                    if markerChanged {
+                        annotation.apply(marker)
+                        (mapView.view(for: annotation) as? GlobeProfileAnnotationView)?
+                            .configure(with: marker)
+                    }
                 } else {
+                    markerChanged = true
                     let annotation = GlobeProfileAnnotation(marker: marker)
                     annotationsByID[marker.id] = annotation
                     mapView.addAnnotation(annotation)
                 }
+
+                let indicator = backsideIndicator(for: marker, in: mapView)
+                if markerChanged || backsideMarkerSnapshots[marker.id] != marker {
+                    indicator.configure(with: marker)
+                    backsideMarkerSnapshots[marker.id] = marker
+                }
             }
+
+            updateMarkerRepresentations(in: mapView, animated: false)
             syncSelection(in: mapView)
             resolveMarkerOrderOnce(in: mapView)
         }
 
+        private func backsideIndicator(
+            for marker: GlobeProfileMarker,
+            in mapView: NativeGlobeMapView
+        ) -> GlobeBacksideIndicatorView {
+            if let indicator = backsideIndicatorsByID[marker.id] {
+                return indicator
+            }
+
+            let indicator = GlobeBacksideIndicatorView()
+            indicator.isHidden = true
+            indicator.alpha = 0
+            indicator.onActivate = { [weak self, weak mapView, weak indicator] in
+                guard let self, let mapView, let indicator else { return }
+                self.activateBacksideMarker(marker.id, indicator: indicator, in: mapView)
+            }
+            backsideIndicatorsByID[marker.id] = indicator
+            mapView.backsideOverlayView.addSubview(indicator)
+            return indicator
+        }
+
+        private func updateMarkerRepresentations(
+            in mapView: NativeGlobeMapView,
+            animated: Bool
+        ) {
+            guard !needsInitialFraming,
+                  !defersMarkerSyncUntilCameraCommit,
+                  mapView.bounds.width > 0,
+                  mapView.bounds.height > 0 else { return }
+
+            let cameraCenter = SphereVector(
+                latitude: mapView.camera.centerCoordinate.latitude,
+                longitude: mapView.camera.centerCoordinate.longitude
+            )
+            let horizon = GlobeMapView.visibleAngularRadius(in: mapView)
+            // 들어올 때와 나갈 때 경계를 조금 다르게 둬 limb 근처 깜빡임을 막는다.
+            let frontMargin = min(0.25 * Double.pi / 180, horizon * 0.01)
+            let backMargin = min(0.05 * Double.pi / 180, horizon * 0.002)
+            let frontRadius = max(horizon - frontMargin, 0)
+            let backRadius = max(horizon - backMargin, 0)
+
+            for marker in latestMarkers {
+                guard let annotation = annotationsByID[marker.id],
+                      let indicator = backsideIndicatorsByID[marker.id] else { continue }
+
+                let city = SphereVector(
+                    latitude: marker.city.latitude,
+                    longitude: marker.city.longitude
+                )
+                let distance = cameraCenter.angularDistance(to: city)
+                let nativeView = mapView.view(for: annotation) as? GlobeProfileAnnotationView
+                let nativeIsSafe = nativeView.map {
+                    nativeViewIsSafelyVisible($0, in: mapView)
+                } ?? false
+                let isCurrentlyBackside = backsideMarkerIDs.contains(marker.id)
+                let cameraIsLevel = abs(mapView.camera.pitch) < 1
+
+                let shouldShowBackside: Bool
+                if cameraIsLevel {
+                    if isCurrentlyBackside {
+                        shouldShowBackside = !(distance <= frontRadius && nativeIsSafe)
+                    } else {
+                        shouldShowBackside = distance >= backRadius
+                    }
+                } else if nativeIsSafe {
+                    // 기울어진 카메라는 horizon이 비대칭이므로 실제 렌더링 결과를 우선한다.
+                    shouldShowBackside = false
+                } else {
+                    shouldShowBackside = isCurrentlyBackside || distance >= backRadius
+                }
+
+                if shouldShowBackside || isCurrentlyBackside {
+                    positionBacksideIndicator(
+                        indicator,
+                        annotation: annotation,
+                        nativeView: nativeView,
+                        toward: city,
+                        from: cameraCenter,
+                        distanceFromCenter: distance,
+                        handoffRadius: backRadius,
+                        horizon: horizon,
+                        in: mapView
+                    )
+                }
+                setBacksideRepresentation(
+                    shouldShowBackside,
+                    for: marker.id,
+                    nativeView: nativeView,
+                    indicator: indicator,
+                    animated: animated
+                )
+            }
+            syncSelection(in: mapView)
+        }
+
+        private func nativeViewIsSafelyVisible(
+            _ view: GlobeProfileAnnotationView,
+            in mapView: NativeGlobeMapView
+        ) -> Bool {
+            guard view.superview != nil else { return false }
+            let frame = mapView.convert(view.bounds, from: view)
+            let safeRect = mapView.bounds.inset(by: UIEdgeInsets(
+                top: 4,
+                left: 4,
+                bottom: mapView.layoutMargins.bottom + 4,
+                right: 4
+            ))
+            return frame.minX.isFinite
+                && frame.minY.isFinite
+                && frame.maxX.isFinite
+                && frame.maxY.isFinite
+                && safeRect.contains(frame)
+        }
+
+        private func setBacksideRepresentation(
+            _ showsBackside: Bool,
+            for id: GlobeProfileMarker.ID,
+            nativeView: GlobeProfileAnnotationView?,
+            indicator: GlobeBacksideIndicatorView,
+            animated: Bool
+        ) {
+            let stateChanged = backsideMarkerIDs.contains(id) != showsBackside
+            if showsBackside {
+                backsideMarkerIDs.insert(id)
+            } else {
+                backsideMarkerIDs.remove(id)
+            }
+
+            indicator.setSelected(selection.wrappedValue?.id == id)
+            guard stateChanged else { return }
+
+            // 두 표현은 전환 직전에 같은 프레임에 놓인다. 애니메이션을 겹치지 않고
+            // 소유권만 즉시 바꾸면 드래그 중에도 위치가 한 프레임도 튀지 않는다.
+            indicator.layer.removeAllAnimations()
+            nativeView?.layer.removeAllAnimations()
+            indicator.alpha = showsBackside ? 1 : 0
+            indicator.isHidden = !showsBackside
+            nativeView?.alpha = showsBackside ? 0 : 1
+            nativeView?.isHidden = showsBackside
+            nativeView?.isEnabled = !showsBackside
+        }
+
+        private func positionBacksideIndicator(
+            _ indicator: GlobeBacksideIndicatorView,
+            annotation: GlobeProfileAnnotation,
+            nativeView: GlobeProfileAnnotationView?,
+            toward city: SphereVector,
+            from cameraCenter: SphereVector,
+            distanceFromCenter: Double,
+            handoffRadius: Double,
+            horizon: Double,
+            in mapView: NativeGlobeMapView
+        ) {
+            let cityDistance = cameraCenter.angularDistance(to: city)
+            // 지평선 바로 위 좌표는 MapKit convert가 뒤쪽 값으로 튈 수 있다.
+            // 안전한 앞면 지점을 투영한 뒤 구면 원근식으로 실제 limb까지 확장한다.
+            let probeAngle = min(
+                cityDistance,
+                max(horizon * 0.82, min(5 * .pi / 180, horizon * 0.5))
+            )
+            let probeCoordinate = cameraCenter.moved(toward: city, by: probeAngle).coordinate
+            let fallbackCenter = CGPoint(x: mapView.bounds.midX, y: mapView.bounds.midY)
+            let convertedCenter = mapView.convert(
+                mapView.camera.centerCoordinate,
+                toPointTo: mapView
+            )
+            let mapCenter = convertedCenter.x.isFinite && convertedCenter.y.isFinite
+                ? convertedCenter
+                : fallbackCenter
+            // 실제 대권 경로가 지구 뒤로 사라지는 지평선 교차점.
+            // 도시 방향을 쓰는 것보다 보이는 점선 끝에 정확히 붙는다.
+            let routeEndPoint = routeLimbPoint(
+                for: annotation.id,
+                hiddenCity: city,
+                cameraCenter: cameraCenter,
+                visibleRadius: max(horizon - 0.12 * .pi / 180, 0),
+                in: mapView
+            )
+            var directionPoint = routeEndPoint
+                ?? mapView.convert(probeCoordinate, toPointTo: mapView)
+
+            if !directionPoint.x.isFinite
+                || !directionPoint.y.isFinite
+                || hypot(directionPoint.x - mapCenter.x, directionPoint.y - mapCenter.y) < 1 {
+                let fallbackProbeAngle = min(
+                    cityDistance,
+                    max(horizon * 0.45, 5 * .pi / 180)
+                )
+                directionPoint = mapView.convert(
+                    cameraCenter.moved(toward: city, by: fallbackProbeAngle).coordinate,
+                    toPointTo: mapView
+                )
+            }
+
+            var dx = directionPoint.x - mapCenter.x
+            var dy = directionPoint.y - mapCenter.y
+            let length = hypot(dx, dy)
+            if !length.isFinite || length < 1 {
+                dx = indicator === backsideIndicatorsByID[.mine] ? -1 : 1
+                dy = 0
+            } else {
+                dx /= length
+                dy /= length
+            }
+
+            // MapKit이 투영한 실제 limb 거리를 그대로 쓴다. 추정 반지름을 쓰지 않아
+            // 회전·확대 중에도 프로필이 지구 표면과 따로 노는 현상이 없다.
+            let fallbackRimDistance = apparentGlobeRadius(in: mapView)
+            let calculatedRimDistance = projectedHorizonDistance(
+                fromProbeDistance: length,
+                probeAngle: probeAngle,
+                in: mapView
+            ) ?? fallbackRimDistance
+            // MapKit은 뒷면에 가까운 convert 결과를 화면 밖으로 크게 보낼 수 있다.
+            // 실제 globe 크기 범위로만 제한해 방향은 투영값을, 반경은 안정된 silhouette을 따른다.
+            let projectedRimDistance = min(
+                max(calculatedRimDistance, fallbackRimDistance * 0.85),
+                fallbackRimDistance * 1.05
+            )
+            let rimPoint = routeEndPoint ?? CGPoint(
+                x: mapCenter.x + dx * projectedRimDistance,
+                y: mapCenter.y + dy * projectedRimDistance
+            )
+            let outsidePlacement = outsideMarkerPlacement(
+                at: rimPoint,
+                dx: dx,
+                dy: dy,
+                in: mapView
+            )
+
+            let transitionBand = min(6 * Double.pi / 180, max(horizon * 0.1, 1 * .pi / 180))
+            let rawProgress = min(max(
+                (handoffRadius + transitionBand - distanceFromCenter) / transitionBand,
+                0
+            ), 1)
+            let transitionProgress = rawProgress * rawProgress * (3 - 2 * rawProgress)
+            let nativeTarget = nativeMarkerCenter(
+                for: annotation,
+                nativeView: nativeView,
+                in: mapView
+            )
+            indicator.center = CGPoint(
+                x: outsidePlacement.center.x
+                    + (nativeTarget.x - outsidePlacement.center.x) * transitionProgress,
+                y: outsidePlacement.center.y
+                    + (nativeTarget.y - outsidePlacement.center.y) * transitionProgress
+            )
+            let scale = outsidePlacement.scale
+                + (1 - outsidePlacement.scale) * transitionProgress
+            indicator.setProfileScale(scale)
+        }
+
+        private func routeLimbPoint(
+            for id: GlobeProfileMarker.ID,
+            hiddenCity: SphereVector,
+            cameraCenter: SphereVector,
+            visibleRadius: Double,
+            in mapView: NativeGlobeMapView
+        ) -> CGPoint? {
+            guard let otherMarker = latestMarkers.first(where: { $0.id != id }) else {
+                return nil
+            }
+            let otherCity = SphereVector(
+                latitude: otherMarker.city.latitude,
+                longitude: otherMarker.city.longitude
+            )
+            let routeSpan = hiddenCity.angularDistance(to: otherCity)
+            guard routeSpan > Double.ulpOfOne,
+                  cameraCenter.angularDistance(to: hiddenCity) > visibleRadius else {
+                return nil
+            }
+
+            // 뒤면 도시에서 쌍의 도시 쪽으로 점선을 따라가며
+            // 처음 앞면으로 들어오는 지점을 찾는다.
+            let sampleCount = 64
+            var outsideAngle = 0.0
+            for sample in 1...sampleCount {
+                let angle = routeSpan * Double(sample) / Double(sampleCount)
+                let candidate = hiddenCity.moved(toward: otherCity, by: angle)
+                guard cameraCenter.angularDistance(to: candidate) <= visibleRadius else {
+                    outsideAngle = angle
+                    continue
+                }
+
+                var lower = outsideAngle
+                var upper = angle
+                for _ in 0..<18 {
+                    let midpoint = (lower + upper) / 2
+                    let midpointCity = hiddenCity.moved(toward: otherCity, by: midpoint)
+                    if cameraCenter.angularDistance(to: midpointCity) <= visibleRadius {
+                        upper = midpoint
+                    } else {
+                        lower = midpoint
+                    }
+                }
+                let point = mapView.convert(
+                    hiddenCity.moved(toward: otherCity, by: upper).coordinate,
+                    toPointTo: mapView
+                )
+                guard point.x.isFinite, point.y.isFinite else { return nil }
+                return point
+            }
+            return nil
+        }
+
+        private func projectedHorizonDistance(
+            fromProbeDistance probeDistance: CGFloat,
+            probeAngle: Double,
+            in mapView: NativeGlobeMapView
+        ) -> CGFloat? {
+            guard probeDistance.isFinite,
+                  probeDistance > 1,
+                  probeAngle > 0 else { return nil }
+            let pitch = mapView.camera.pitch * .pi / 180
+            let altitude = mapView.camera.centerCoordinateDistance * max(cos(pitch), 0)
+            let cameraDistance = GlobeMapView.earthRadius + altitude
+            let limbDenominatorSquared = cameraDistance * cameraDistance
+                - GlobeMapView.earthRadius * GlobeMapView.earthRadius
+            guard cameraDistance.isFinite,
+                  limbDenominatorSquared > 0 else { return nil }
+            let denominator = sin(probeAngle) * sqrt(limbDenominatorSquared)
+            guard abs(denominator) > Double.ulpOfOne else { return nil }
+            let scale = (cameraDistance
+                - GlobeMapView.earthRadius * cos(probeAngle)) / denominator
+            guard scale.isFinite, scale > 0 else { return nil }
+            return probeDistance * CGFloat(scale)
+        }
+
+        private func nativeMarkerCenter(
+            for annotation: GlobeProfileAnnotation,
+            nativeView: GlobeProfileAnnotationView?,
+            in mapView: NativeGlobeMapView
+        ) -> CGPoint {
+            if let nativeView, nativeView.superview != nil {
+                let frame = mapView.convert(nativeView.bounds, from: nativeView)
+                if frame.midX.isFinite, frame.midY.isFinite {
+                    return CGPoint(x: frame.midX, y: frame.midY)
+                }
+            }
+            let anchor = mapView.convert(annotation.coordinate, toPointTo: mapView)
+            return CGPoint(
+                x: anchor.x + GlobeProfileAnnotationView.pinCenterOffset.x,
+                y: anchor.y + GlobeProfileAnnotationView.pinCenterOffset.y
+            )
+        }
+
+        private func outsideMarkerPlacement(
+            at rimPoint: CGPoint,
+            dx: CGFloat,
+            dy: CGFloat,
+            in mapView: NativeGlobeMapView
+        ) -> (center: CGPoint, scale: CGFloat) {
+            let preferredScale: CGFloat = 0.58
+            let minimumScale: CGFloat = 0.38
+            let gap: CGFloat = 2
+            let usableBounds = mapView.bounds.inset(by: UIEdgeInsets(
+                top: 4,
+                left: 4,
+                bottom: mapView.layoutMargins.bottom + 4,
+                right: 4
+            ))
+
+            func placement(scale: CGFloat) -> (CGPoint, Bool) {
+                let halfWidth = GlobeProfileAnnotationView.canvasSize.width / 2
+                let halfCanvasHeight = GlobeProfileAnnotationView.canvasSize.height / 2
+                let minX = -halfWidth * scale
+                let maxX = halfWidth * scale
+                let minY = -halfCanvasHeight * scale
+                let maxY = (GlobeProfileAnnotationView.backsideContentHeight
+                    - halfCanvasHeight) * scale
+                let nearestProjection = min(dx * minX, dx * maxX)
+                    + min(dy * minY, dy * maxY)
+                let distance = -nearestProjection + gap
+                let center = CGPoint(
+                    x: rimPoint.x + dx * distance,
+                    y: rimPoint.y + dy * distance
+                )
+                let visualFrame = CGRect(
+                    x: center.x + minX,
+                    y: center.y + minY,
+                    width: maxX - minX,
+                    height: maxY - minY
+                )
+                return (center, usableBounds.contains(visualFrame))
+            }
+
+            if placement(scale: preferredScale).1 {
+                return (placement(scale: preferredScale).0, preferredScale)
+            }
+            var lower = minimumScale
+            var upper = preferredScale
+            for _ in 0..<12 {
+                let candidate = (lower + upper) / 2
+                if placement(scale: candidate).1 {
+                    lower = candidate
+                } else {
+                    upper = candidate
+                }
+            }
+            return (placement(scale: lower).0, lower)
+        }
+
+        private func apparentGlobeRadius(in mapView: NativeGlobeMapView) -> CGFloat {
+            let baseRadius = max(min(mapView.bounds.width, mapView.bounds.height) / 2 - 30, 40)
+            guard let maximumCameraDistance,
+                  maximumCameraDistance > 0 else { return baseRadius }
+
+            let pitch = mapView.camera.pitch * .pi / 180
+            let currentAltitude = max(
+                mapView.camera.centerCoordinateDistance * max(cos(pitch), 0),
+                1
+            )
+            let baseAngle = asin(min(GlobeMapView.earthRadius
+                / (GlobeMapView.earthRadius + maximumCameraDistance), 1))
+            let currentAngle = asin(min(GlobeMapView.earthRadius
+                / (GlobeMapView.earthRadius + currentAltitude), 1))
+            guard baseAngle > 0 else { return baseRadius }
+            return min(
+                baseRadius * CGFloat(tan(currentAngle) / tan(baseAngle)),
+                hypot(mapView.bounds.width, mapView.bounds.height)
+            )
+        }
+
         func syncSelection(in mapView: MKMapView) {
+            let selectedID = selection.wrappedValue?.id
+            for (id, indicator) in backsideIndicatorsByID {
+                indicator.setSelected(selectedID == id)
+            }
+
+            let desiredNativeID = selectedID.flatMap {
+                backsideMarkerIDs.contains($0) ? nil : $0
+            }
             let selectedAnnotation = mapView.selectedAnnotations
                 .compactMap { $0 as? GlobeProfileAnnotation }
                 .first
-            guard selectedAnnotation?.id != selection.wrappedValue?.id else { return }
+            guard selectedAnnotation?.id != desiredNativeID else { return }
 
             isSynchronizingSelection = true
             defer { isSynchronizingSelection = false }
@@ -558,8 +1039,8 @@ struct GlobeMapView: UIViewRepresentable {
             if let selectedAnnotation {
                 mapView.deselectAnnotation(selectedAnnotation, animated: false)
             }
-            if let selectedID = selection.wrappedValue?.id,
-               let annotation = annotationsByID[selectedID] {
+            if let desiredNativeID,
+               let annotation = annotationsByID[desiredNativeID] {
                 mapView.selectAnnotation(annotation, animated: false)
             }
         }
@@ -592,10 +1073,12 @@ struct GlobeMapView: UIViewRepresentable {
             needsInitialFraming = false
             mapView.cameraZoomRange = nil
             mapView.setVisibleMapRect(MKMapRect.world, animated: false)
-            mapView.setCenter(requestedFraming.center(in: mapView), animated: false)
             let camera = mapView.camera
+            camera.pitch = 0
             camera.centerCoordinateDistance *= 1000
             mapView.setCamera(camera, animated: false)
+            maximumCameraDistance = mapView.camera.centerCoordinateDistance
+            mapView.setCenter(requestedFraming.center(in: mapView), animated: false)
 
             scheduleMarkerPlacement(afterDisplayFrames: 2)
         }
@@ -653,11 +1136,16 @@ struct GlobeMapView: UIViewRepresentable {
             )
             guard let profileView = view as? GlobeProfileAnnotationView else { return view }
             profileView.configure(with: annotation.marker)
+            profileView.setBacksidePresentation(false)
             profileView.setSide(markerOrder.wrappedValue.side(for: annotation.id))
             profileView.onActivate = { [weak self, weak mapView] in
                 guard let self, let mapView else { return }
                 self.activate(annotation, in: mapView)
             }
+            let showsBackside = backsideMarkerIDs.contains(annotation.id)
+            profileView.alpha = showsBackside ? 0 : 1
+            profileView.isHidden = showsBackside
+            profileView.isEnabled = !showsBackside
             return profileView
         }
 
@@ -680,8 +1168,8 @@ struct GlobeMapView: UIViewRepresentable {
             guard let mine = annotationsByID[.mine],
                   let partner = annotationsByID[.partner] else { return }
 
-            let mineX = mapView.convert(mine.coordinate, toPointTo: mapView).x
-            let partnerX = mapView.convert(partner.coordinate, toPointTo: mapView).x
+            let mineX = displayedX(for: mine, in: mapView)
+            let partnerX = displayedX(for: partner, in: mapView)
             let currentOrder = markerOrder.wrappedValue
             let nextOrder: GlobeMarkerOrder
             let horizontalGap = partnerX - mineX
@@ -701,6 +1189,24 @@ struct GlobeMapView: UIViewRepresentable {
             applyMarkerSides(nextOrder, in: mapView)
         }
 
+        private func displayedX(
+            for annotation: GlobeProfileAnnotation,
+            in mapView: MKMapView
+        ) -> CGFloat {
+            if backsideMarkerIDs.contains(annotation.id),
+               let indicator = backsideIndicatorsByID[annotation.id],
+               !indicator.isHidden {
+                return mapView.convert(
+                    CGPoint(x: indicator.bounds.midX, y: indicator.bounds.midY),
+                    from: indicator
+                ).x
+            }
+            if let view = mapView.view(for: annotation) as? GlobeProfileAnnotationView {
+                return mapView.convert(view.bounds, from: view).midX
+            }
+            return mapView.convert(annotation.coordinate, toPointTo: mapView).x
+        }
+
         private func applyMarkerSides(
             _ order: GlobeMarkerOrder,
             in mapView: MKMapView
@@ -708,6 +1214,7 @@ struct GlobeMapView: UIViewRepresentable {
             for (id, annotation) in annotationsByID {
                 (mapView.view(for: annotation) as? GlobeProfileAnnotationView)?
                     .setSide(order.side(for: id))
+                backsideIndicatorsByID[id]?.setSide(order.side(for: id))
             }
         }
 
@@ -716,10 +1223,31 @@ struct GlobeMapView: UIViewRepresentable {
             in mapView: MKMapView
         ) {
             guard selection.wrappedValue?.id != annotation.id else { return }
+            let anchor: CGPoint
+            if let view = mapView.view(for: annotation) as? GlobeProfileAnnotationView {
+                let frame = mapView.convert(view.bounds, from: view)
+                anchor = CGPoint(x: frame.midX, y: frame.midY)
+            } else {
+                anchor = mapView.convert(annotation.coordinate, toPointTo: mapView)
+            }
             selection.wrappedValue = GlobeMarkerSelection(
                 id: annotation.id,
-                anchor: mapView.convert(annotation.coordinate, toPointTo: mapView)
+                anchor: anchor
             )
+        }
+
+        private func activateBacksideMarker(
+            _ id: GlobeProfileMarker.ID,
+            indicator: GlobeBacksideIndicatorView,
+            in mapView: NativeGlobeMapView
+        ) {
+            guard selection.wrappedValue?.id != id else { return }
+            let anchor = mapView.convert(
+                CGPoint(x: indicator.bounds.midX, y: indicator.bounds.midY),
+                from: indicator
+            )
+            selection.wrappedValue = GlobeMarkerSelection(id: id, anchor: anchor)
+            syncSelection(in: mapView)
         }
 
         func mapView(
@@ -744,10 +1272,12 @@ struct GlobeMapView: UIViewRepresentable {
         ) {
             guard !isSynchronizingSelection,
                   let annotation = view.annotation as? GlobeProfileAnnotation,
+                  !backsideMarkerIDs.contains(annotation.id),
                   selection.wrappedValue?.id != annotation.id else { return }
+            let frame = mapView.convert(view.bounds, from: view)
             selection.wrappedValue = GlobeMarkerSelection(
                 id: annotation.id,
-                anchor: mapView.convert(annotation.coordinate, toPointTo: mapView)
+                anchor: CGPoint(x: frame.midX, y: frame.midY)
             )
         }
 
@@ -760,6 +1290,7 @@ struct GlobeMapView: UIViewRepresentable {
             DispatchQueue.main.async { [weak self, weak mapView] in
                 guard let self,
                       let mapView,
+                      !self.backsideMarkerIDs.contains(annotation.id),
                       !mapView.selectedAnnotations.contains(where: {
                           $0 is GlobeProfileAnnotation
                       }),
@@ -772,12 +1303,63 @@ struct GlobeMapView: UIViewRepresentable {
             _ mapView: MKMapView,
             regionWillChangeAnimated animated: Bool
         ) {
+            startMarkerTracking()
             let userIsMovingMap = mapView.gestureRecognizers?.contains {
                 $0.state == .began || $0.state == .changed
             } ?? false
             guard userIsMovingMap else { return }
+            selection.wrappedValue = nil
+            backsideIndicatorsByID.values.forEach { $0.setSelected(false) }
             mapView.selectedAnnotations.forEach {
                 mapView.deselectAnnotation($0, animated: true)
+            }
+        }
+
+        func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+            guard let mapView = mapView as? NativeGlobeMapView else { return }
+            updateMarkerRepresentations(in: mapView, animated: true)
+        }
+
+        func mapView(
+            _ mapView: MKMapView,
+            regionDidChangeAnimated animated: Bool
+        ) {
+            guard let mapView = mapView as? NativeGlobeMapView else { return }
+            updateMarkerRepresentations(in: mapView, animated: false)
+            markerTrackingFramesRemaining = 2
+        }
+
+        private func startMarkerTracking() {
+            markerTrackingFramesRemaining = nil
+            guard markerTrackingDisplayLink == nil else { return }
+            let displayLink = CADisplayLink(
+                target: self,
+                selector: #selector(advanceMarkerTracking)
+            )
+            markerTrackingDisplayLink = displayLink
+            displayLink.add(to: .main, forMode: .common)
+        }
+
+        @objc private func advanceMarkerTracking() {
+            if let mapView {
+                updateMarkerRepresentations(in: mapView, animated: false)
+            }
+            guard let remaining = markerTrackingFramesRemaining else { return }
+            if remaining <= 1 {
+                markerTrackingDisplayLink?.invalidate()
+                markerTrackingDisplayLink = nil
+                markerTrackingFramesRemaining = nil
+            } else {
+                markerTrackingFramesRemaining = remaining - 1
+            }
+        }
+
+        func mapView(_ mapView: MKMapView, didAdd views: [MKAnnotationView]) {
+            guard views.contains(where: { $0 is GlobeProfileAnnotationView }),
+                  let mapView = mapView as? NativeGlobeMapView else { return }
+            DispatchQueue.main.async { [weak self, weak mapView] in
+                guard let self, let mapView else { return }
+                self.updateMarkerRepresentations(in: mapView, animated: true)
             }
         }
 
@@ -933,9 +1515,12 @@ private final class GlobeProfileAnnotation: NSObject, MKAnnotation {
 
 private final class GlobeProfileAnnotationView: MKAnnotationView {
     static let reuseIdentifier = "GlobeProfileAnnotationView"
+    static let canvasSize = CGSize(width: 68, height: 92)
+    /// 핀/줄을 숨긴 뒤면 표현의 실제 표시 영역(배터리·아바타·배지).
+    static let backsideContentHeight: CGFloat = 77
 
     private enum Layout {
-        static let canvasSize = CGSize(width: 68, height: 92)
+        static let canvasSize = GlobeProfileAnnotationView.canvasSize
         static let avatarSize: CGFloat = 46
         /// 배터리 바(17pt) + 여백(5pt) 아래에서 아바타가 시작한다.
         static let avatarTop: CGFloat = 22
@@ -945,6 +1530,13 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         static let dotSize: CGFloat = 6
         static let dotOriginY: CGFloat = 84
         static let dotCenterY = dotOriginY + dotSize / 2
+    }
+
+    static var pinCenterOffset: CGPoint {
+        CGPoint(
+            x: 0,
+            y: Layout.canvasSize.height / 2 - Layout.dotCenterY
+        )
     }
 
     private let stemView = UIView()
@@ -963,6 +1555,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     private let batteryBoltImageView = UIImageView()
     private var batteryDisplay: GlobeBatteryDisplay?
     private var markerSide = GlobeMarkerSide.left
+    private var isBacksidePresentation = false
     private let tapFeedback = UIImpactFeedbackGenerator(style: .medium)
     var onActivate: (() -> Void)?
 
@@ -970,10 +1563,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
 
         bounds = CGRect(origin: .zero, size: Layout.canvasSize)
-        centerOffset = CGPoint(
-            x: 0,
-            y: Layout.canvasSize.height / 2 - Layout.dotCenterY
-        )
+        centerOffset = Self.pinCenterOffset
         backgroundColor = .clear
         isOpaque = false
         clipsToBounds = false
@@ -1195,6 +1785,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         batteryBoltImageView.isHidden = true
         accessibilityLabel = nil
         accessibilityValue = nil
+        setBacksidePresentation(false)
         accessibilityTraits = [.button]
         tapFeedback.prepare()
     }
@@ -1205,16 +1796,30 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         setNeedsLayout()
     }
 
+    func setBacksidePresentation(_ isBacksidePresentation: Bool) {
+        self.isBacksidePresentation = isBacksidePresentation
+        stemView.isHidden = isBacksidePresentation
+        dotView.isHidden = isBacksidePresentation
+        avatarView.alpha = isBacksidePresentation ? 0.94 : 1
+        accessibilityHint = "두 번 탭하면 프로필 상태를 표시합니다"
+        updateAccessibilityValue()
+    }
+
     override func setSelected(_ selected: Bool, animated: Bool) {
         let selectionChanged = selected != isSelected
         super.setSelected(selected, animated: animated)
         guard selectionChanged else { return }
 
         accessibilityTraits = selected ? [.button, .selected] : [.button]
-        accessibilityValue = selected ? "선택됨" : nil
+        updateAccessibilityValue()
         if !selected {
             clearSelection()
         }
+    }
+
+    override func accessibilityActivate() -> Bool {
+        handleTouchDown()
+        return true
     }
 
     @objc private func handleTouchDown() {
@@ -1288,7 +1893,18 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         } ?? ""
         accessibilityLabel =
             "\(marker.displayName), \(marker.city.name) 프로필\(signalDescription)\(batteryDescription)"
-        accessibilityHint = "두 번 탭하면 프로필 상태를 표시합니다"
+        updateAccessibilityValue()
+    }
+
+    private func updateAccessibilityValue() {
+        var values: [String] = []
+        if isBacksidePresentation {
+            values.append("지구 반대편 방향")
+        }
+        if isSelected {
+            values.append("선택됨")
+        }
+        accessibilityValue = values.isEmpty ? nil : values.joined(separator: ", ")
     }
 
     private func applyBattery(_ display: GlobeBatteryDisplay?) {
@@ -1317,6 +1933,77 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         batteryPillView.alpha = display.isMuted ? 0.62 : 1
 
         setNeedsLayout()
+    }
+}
+
+/// 지도 좌표를 바꾸지 않고, 실제 도시가 뒷면에 있다는 방향만 화면 위에 표시한다.
+private final class GlobeBacksideIndicatorView: UIView {
+    private static let size = CGSize(width: 92, height: 92)
+
+    private let profileView = GlobeProfileAnnotationView(
+        annotation: nil,
+        reuseIdentifier: nil
+    )
+
+    var onActivate: (() -> Void)? {
+        didSet {
+            profileView.onActivate = onActivate
+        }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        bounds = CGRect(origin: .zero, size: Self.size)
+        backgroundColor = .clear
+        isOpaque = false
+        clipsToBounds = false
+        isAccessibilityElement = false
+
+        profileView.setBacksidePresentation(true)
+        addSubview(profileView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        profileView.bounds = CGRect(origin: .zero, size: profileView.bounds.size)
+        profileView.center = CGPoint(x: bounds.midX, y: bounds.midY)
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let profilePoint = convert(point, to: profileView)
+        guard profileView.bounds.insetBy(dx: 4, dy: 14).contains(profilePoint) else {
+            return nil
+        }
+        return profileView.hitTest(profilePoint, with: event)
+    }
+
+    func configure(with marker: GlobeProfileMarker) {
+        profileView.configure(with: marker)
+        profileView.setBacksidePresentation(true)
+    }
+
+    func setSide(_ side: GlobeMarkerSide) {
+        profileView.setSide(side)
+    }
+
+    func setSelected(_ selected: Bool) {
+        profileView.setSelected(selected, animated: false)
+    }
+
+    func setProfileScale(_ scale: CGFloat) {
+        profileView.transform = CGAffineTransform(scaleX: scale, y: scale)
+    }
+}
+
+private final class PassthroughOverlayView: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hitView = super.hitTest(point, with: event)
+        return hitView === self ? nil : hitView
     }
 }
 
@@ -1390,8 +2077,22 @@ private enum EmojiStickerRenderer {
 
 final class NativeGlobeMapView: MKMapView {
     var onUsableLayout: (() -> Void)?
+    fileprivate let backsideOverlayView = PassthroughOverlayView()
 
     private var lastUsableSize = CGSize.zero
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backsideOverlayView.backgroundColor = .clear
+        backsideOverlayView.isOpaque = false
+        backsideOverlayView.clipsToBounds = false
+        addSubview(backsideOverlayView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -1403,6 +2104,9 @@ final class NativeGlobeMapView: MKMapView {
             bottom: safeAreaInsets.bottom + 72,
             right: 7
         )
+
+        backsideOverlayView.frame = bounds
+        bringSubviewToFront(backsideOverlayView)
 
         guard bounds.width > 0,
               bounds.height > 0,
