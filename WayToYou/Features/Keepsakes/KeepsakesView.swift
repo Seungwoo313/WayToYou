@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 주고받은 것들의 연대기. 예전 버전은 소포 한 개, 시그널 한 개만 기억해서
 /// 어제 무슨 일이 있었는지 앱이 전혀 모르는 상태였다.
-struct MemoryLogSheet: View {
+struct KeepsakesView: View {
     let store: WayToYouStore
     let now: Date
     let presentedAsSheet: Bool
@@ -51,7 +51,7 @@ struct MemoryLogSheet: View {
                     }
                 }
             }
-            .navigationTitle("우리의 기록")
+            .navigationTitle("간직함")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if presentedAsSheet {
@@ -105,10 +105,10 @@ struct MemoryLogSheet: View {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.system(size: 34, weight: .light))
                 .foregroundStyle(Palette.textTertiary)
-            Text("아직 기록이 없어요")
+            Text("아직 간직한 것이 없어요")
                 .font(.rounded(.title3, .semibold))
                 .foregroundStyle(Palette.textPrimary)
-            Text("주고받은 소포와 시그널이 여기 쌓여요")
+            Text("도착한 편지와 선물이 이곳에 오래 남아요")
                 .font(.rounded(.subheadline))
                 .foregroundStyle(Palette.textSecondary)
         }
@@ -203,7 +203,7 @@ struct MemoryLogSheet: View {
         let tint = Palette.tint(for: event.direction)
         return HStack(spacing: Metric.m) {
             Circle()
-                .fill(event.signal.color)
+                .fill(Palette.textSecondary)
                 .frame(width: 6, height: 6)
                 .padding(.leading, 13)
 

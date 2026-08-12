@@ -81,10 +81,21 @@ final class SupabaseSessionController {
                 state = .signedOut
                 return
             }
+            // Keychain은 앱 삭제 뒤에도 남는다. 로컬 세션의 사용자가 서버에도
+            // 존재하는지 확인해야 개발 초기화나 서버 삭제 뒤 유령 세션을 복원하지 않는다.
+            let remoteUser = try await client.auth.user(jwt: session.accessToken)
+            guard remoteUser.id == session.user.id else {
+                try? await client.auth.signOut(scope: .local)
+                state = .signedOut
+                return
+            }
             applyAuthenticatedSession(session)
             Self.logger.notice("기존 Supabase 인증 세션을 복원했습니다.")
-        } catch let authError as AuthError where authError.errorCode == .sessionNotFound {
+        } catch let authError as AuthError where Self.isStaleSession(authError) {
+            try? await client.auth.signOut(scope: .local)
             state = .signedOut
+            userMessage = nil
+            Self.logger.notice("서버에 존재하지 않는 로컬 인증 세션을 삭제했습니다.")
         } catch {
             state = .unavailable
             userMessage = "계정을 확인하지 못했어요. 잠시 후 다시 시도해주세요."
@@ -256,6 +267,16 @@ final class SupabaseSessionController {
                 )
             )
         )
+    }
+
+    private static func isStaleSession(_ error: AuthError) -> Bool {
+        switch error.errorCode {
+        case .userNotFound, .sessionNotFound, .sessionExpired,
+             .refreshTokenNotFound, .refreshTokenAlreadyUsed:
+            true
+        default:
+            false
+        }
     }
 
     private static func randomNonceString(length: Int = 32) -> String {

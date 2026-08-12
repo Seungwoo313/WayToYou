@@ -6,20 +6,35 @@ struct ConnectionOnboardingView: View {
     @Bindable var store: WayToYouStore
 
     @State private var draftName: String
-    @State private var draftCityID: String
+    @State private var draftCity: RouteCity?
+    @State private var draftDefaultAirport: RouteAirport?
     @State private var isPickingCity = false
+    @State private var isPickingDefaultAirport = false
     @State private var isEditingProfile = false
     @State private var isEnteringCode = false
+    @State private var draftAvatarData: Data?
+    @State private var avatarWasEdited = false
+    @State private var avatarSelectionMessage: String?
 
     init(store: WayToYouStore, suggestedName: String? = nil) {
         self.store = store
         _draftName = State(initialValue: store.myProfile?.displayName ?? suggestedName ?? "")
-        _draftCityID = State(initialValue: store.myProfile?.cityID ?? store.homeCityID)
+        _draftCity = State(initialValue: store.myProfile?.city)
+        _draftDefaultAirport = State(initialValue: store.myProfile?.defaultAirport)
+        _draftAvatarData = State(
+            initialValue: store.myProfile.flatMap { store.avatarData(for: $0) }
+        )
     }
 
-    private var draftCity: CoupleCity { CoupleCity.city(id: draftCityID) }
     private var canSaveProfile: Bool {
         !draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && draftCity != nil
+            && draftDefaultAirport != nil
+    }
+
+    private var draftHasAvatar: Bool {
+        if avatarWasEdited { return draftAvatarData != nil }
+        return draftAvatarData != nil || store.myProfile?.avatarPath != nil
     }
 
     var body: some View {
@@ -44,13 +59,23 @@ struct ConnectionOnboardingView: View {
             }
             .toolbarBackground(.hidden, for: .navigationBar)
             .sheet(isPresented: $isPickingCity) {
-                CityPickerList(
-                    title: "나의 도시",
-                    selection: $draftCityID,
-                    excluding: ""
-                )
+                RouteCityPicker { city in
+                    if draftCity != city {
+                        draftDefaultAirport = nil
+                    }
+                    draftCity = city
+                }
                 .presentationDetents([.large])
                 .presentationBackground(Palette.space)
+            }
+            .sheet(isPresented: $isPickingDefaultAirport) {
+                if let draftCity {
+                    RouteAirportPicker(city: draftCity) { airport in
+                        draftDefaultAirport = airport
+                    }
+                    .presentationDetents([.large])
+                    .presentationBackground(Palette.space)
+                }
             }
             .sheet(isPresented: $isEnteringCode) {
                 InviteCodeEntrySheet(store: store)
@@ -67,10 +92,37 @@ struct ConnectionOnboardingView: View {
             header(
                 step: "1 / 2",
                 title: "먼저, 나를 알려주세요",
-                detail: "상대에게 보일 이름과 도시를 설정해요. 정확한 위치는 공유하지 않아요."
+                detail: "상대에게 보일 사진과 이름, 두 사람의 Route가 시작될 도시를 설정해요."
             )
 
             VStack(alignment: .leading, spacing: Metric.l) {
+                VStack(spacing: Metric.s) {
+                    ProfileAvatarPicker(
+                        data: draftAvatarData,
+                        hasAvatar: draftHasAvatar,
+                        displayName: draftName,
+                        isWorking: store.avatarIsWorking,
+                        size: 84,
+                        onImageReady: { data in
+                            draftAvatarData = data
+                            avatarWasEdited = true
+                            avatarSelectionMessage = nil
+                        },
+                        onUseDefault: {
+                            draftAvatarData = nil
+                            avatarWasEdited = true
+                            avatarSelectionMessage = nil
+                        },
+                        onError: { avatarSelectionMessage = $0 }
+                    )
+
+                    Text(draftHasAvatar ? "사진 변경" : "사진 추가")
+                        .font(.rounded(.caption, .medium))
+                        .foregroundStyle(Palette.textSecondary)
+
+                }
+                .frame(maxWidth: .infinity)
+
                 VStack(alignment: .leading, spacing: Metric.s) {
                     Text("이름")
                         .font(.rounded(.caption, .semibold))
@@ -92,17 +144,18 @@ struct ConnectionOnboardingView: View {
 
                     Button { isPickingCity = true } label: {
                         HStack(spacing: Metric.m) {
-                            Circle()
-                                .fill(Palette.me)
-                                .frame(width: 8, height: 8)
-                                .shadow(color: Palette.me.opacity(0.8), radius: 5)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(draftCity.name)
+                            Image(systemName: "mappin.circle.fill")
+                                .font(.system(size: 24))
+                                .foregroundStyle(Palette.me)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(draftCity?.name ?? "도시 선택")
                                     .font(.rounded(.body, .semibold))
                                     .foregroundStyle(Palette.textPrimary)
-                                Text(draftCity.country)
+                                Text(draftCity.map(\.country)
+                                    ?? "현재 위치로 추천받거나 직접 검색할 수 있어요")
                                     .font(.rounded(.caption))
                                     .foregroundStyle(Palette.textTertiary)
+                                    .lineLimit(2)
                             }
                             Spacer()
                             Image(systemName: "chevron.right")
@@ -115,6 +168,48 @@ struct ConnectionOnboardingView: View {
                     }
                     .buttonStyle(PressableCard())
                 }
+
+                VStack(alignment: .leading, spacing: Metric.s) {
+                    Text("기본 배송 공항")
+                        .font(.rounded(.caption, .semibold))
+                        .foregroundStyle(Palette.textTertiary)
+
+                    Button { isPickingDefaultAirport = true } label: {
+                        HStack(spacing: Metric.m) {
+                            Image(systemName: "airplane.circle.fill")
+                                .font(.system(size: 24))
+                                .foregroundStyle(Palette.me)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(draftDefaultAirport?.name ?? "공항 선택")
+                                    .font(.rounded(.body, .semibold))
+                                    .foregroundStyle(Palette.textPrimary)
+                                    .lineLimit(1)
+                                Text(
+                                    draftDefaultAirport?.displayCode.map { "공항 코드 \($0)" }
+                                        ?? "소포를 보낼 때 자동으로 사용해요"
+                                )
+                                .font(.rounded(.caption))
+                                .foregroundStyle(Palette.textTertiary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Palette.textTertiary)
+                        }
+                        .padding(.horizontal, Metric.l)
+                        .frame(height: 64)
+                        .background(
+                            Palette.surface,
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        )
+                    }
+                    .buttonStyle(PressableCard())
+                    .disabled(draftCity == nil)
+
+                    Text("한 번 저장해두고 ‘우리’에서 필요할 때 바꿀 수 있어요.")
+                        .font(.rounded(.caption))
+                        .foregroundStyle(Palette.textTertiary)
+                }
             }
             .padding(Metric.l)
             .background(Palette.surface, in: RoundedRectangle(cornerRadius: Metric.cardRadius, style: .continuous))
@@ -125,23 +220,43 @@ struct ConnectionOnboardingView: View {
 
             Button {
                 Task {
+                    guard let draftCity, let draftDefaultAirport else { return }
                     let saved = await store.saveProfileToBackend(
                         displayName: draftName,
-                        cityID: draftCityID
+                        city: draftCity,
+                        defaultAirport: draftDefaultAirport
                     )
-                    if saved {
-                        isEditingProfile = false
-                        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                    guard saved else { return }
+
+                    if avatarWasEdited {
+                        let avatarSaved: Bool
+                        if let draftAvatarData {
+                            avatarSaved = await store.uploadProfileAvatar(draftAvatarData)
+                        } else if store.myProfile?.avatarPath != nil {
+                            avatarSaved = await store.clearProfileAvatar()
+                        } else {
+                            avatarSaved = true
+                        }
+                        guard avatarSaved else { return }
+                        avatarWasEdited = false
                     }
+
+                    isEditingProfile = false
+                    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
                 }
             } label: {
                 actionLabel("계속하기", systemImage: "arrow.right")
             }
             .buttonStyle(.glassProminent)
             .tint(.white)
-            .disabled(!canSaveProfile || store.connectionIsWorking)
+            .disabled(
+                !canSaveProfile
+                || store.connectionIsWorking
+                || store.avatarIsWorking
+            )
 
             connectionError
+            avatarError
         }
     }
 
@@ -200,7 +315,11 @@ struct ConnectionOnboardingView: View {
 
             Button {
                 draftName = store.myProfile?.displayName ?? ""
-                draftCityID = store.myProfile?.cityID ?? store.homeCityID
+                draftCity = store.myProfile?.city
+                draftDefaultAirport = store.myProfile?.defaultAirport
+                draftAvatarData = store.myProfile.flatMap { store.avatarData(for: $0) }
+                avatarWasEdited = false
+                avatarSelectionMessage = nil
                 isEditingProfile = true
             } label: {
                 Text("내 정보 수정")
@@ -274,7 +393,7 @@ struct ConnectionOnboardingView: View {
 
     @ViewBuilder
     private func actionLabel(_ title: String, systemImage: String) -> some View {
-        if store.connectionIsWorking {
+        if store.connectionIsWorking || store.avatarIsWorking {
             ProgressView()
                 .tint(.black)
                 .frame(maxWidth: .infinity)
@@ -291,6 +410,16 @@ struct ConnectionOnboardingView: View {
     @ViewBuilder
     private var connectionError: some View {
         if let message = store.connectionMessage {
+            Label(message, systemImage: "exclamationmark.circle.fill")
+                .font(.rounded(.caption, .medium))
+                .foregroundStyle(Palette.you)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var avatarError: some View {
+        if let message = avatarSelectionMessage ?? store.avatarMessage {
             Label(message, systemImage: "exclamationmark.circle.fill")
                 .font(.rounded(.caption, .medium))
                 .foregroundStyle(Palette.you)
@@ -327,6 +456,12 @@ struct ConnectionOnboardingView: View {
 
     private func profileCard(_ profile: UserProfile) -> some View {
         HStack(spacing: Metric.l) {
+            ProfileAvatarImage(
+                data: store.avatarData(for: profile),
+                displayName: profile.displayName,
+                size: 50
+            )
+
             VStack(alignment: .leading, spacing: 3) {
                 Text(profile.displayName)
                     .font(.rounded(.headline, .semibold))
@@ -444,51 +579,8 @@ private extension String {
     }
 }
 
-private enum OnboardingPreviewStage {
-    case profile
-    case connection
-    case invitation
-}
-
-private struct OnboardingPreviewConnectionService: ConnectionServicing {
-    func makeInvite(for profile: UserProfile, at date: Date) -> ConnectionInvite {
-        ConnectionInvite(
-            code: "428617",
-            createdByID: profile.id,
-            createdAt: date,
-            expiresAt: date.addingTimeInterval(24 * 60 * 60)
-        )
-    }
-}
-
-@MainActor
-private func onboardingPreviewStore(_ stage: OnboardingPreviewStage) -> WayToYouStore {
+#Preview("내 정보") {
     let defaults = UserDefaults(suiteName: "wty.onboarding.preview.\(UUID().uuidString)")!
-    let store = WayToYouStore(
-        defaults: defaults,
-        connectionService: OnboardingPreviewConnectionService()
-    )
-
-    guard stage != .profile else { return store }
-    store.saveProfile(displayName: "승우", cityID: "seoul")
-
-    if stage == .invitation {
-        store.createPreviewInvitation()
-    }
-    return store
-}
-
-#Preview("1 · 내 정보") {
-    ConnectionOnboardingView(store: onboardingPreviewStore(.profile))
-        .preferredColorScheme(.dark)
-}
-
-#Preview("2 · 연결 방법") {
-    ConnectionOnboardingView(store: onboardingPreviewStore(.connection))
-        .preferredColorScheme(.dark)
-}
-
-#Preview("3 · 초대 대기") {
-    ConnectionOnboardingView(store: onboardingPreviewStore(.invitation))
+    ConnectionOnboardingView(store: WayToYouStore(defaults: defaults))
         .preferredColorScheme(.dark)
 }

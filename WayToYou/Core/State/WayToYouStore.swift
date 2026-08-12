@@ -13,9 +13,19 @@ final class WayToYouStore {
     private(set) var partnerCityID: String
     private(set) var parcels: [Parcel]
     private(set) var signals: [SignalEvent]
+    private(set) var heartBursts: [HeartBurst]
     private(set) var backendIsReady = false
     private(set) var connectionIsWorking = false
     private(set) var connectionMessage: String?
+    private(set) var heartMessage: String?
+    private(set) var signalMessage: String?
+    private(set) var avatarIsWorking = false
+    private(set) var avatarMessage: String?
+    private(set) var avatarDataByUserID: [UUID: Data] = [:]
+    /// 내 기기의 마지막 publish 결과. 서버 timestamp를 그대로 들고 있는 transient 값이다.
+    private(set) var myDevicePresence: DevicePresence?
+    /// 연결 상대의 마지막 배터리 상태. 로컬에 저장하지 않는다.
+    private(set) var partnerDevicePresence: DevicePresence?
 
     /// 서버가 없는 동안 상대 쪽 반응을 흉내 낸다.
     /// 배송 시간도 압축돼서 전체 루프를 몇 분 안에 볼 수 있다.
@@ -26,8 +36,8 @@ final class WayToYouStore {
         }
     }
 
-    var homeCity: CoupleCity { CoupleCity.city(id: homeCityID) }
-    var partnerCity: CoupleCity { CoupleCity.city(id: partnerCityID) }
+    var homeCity: CoupleCity { myProfile?.mapCity ?? CoupleCity.city(id: homeCityID) }
+    var partnerCity: CoupleCity { partnerProfile?.mapCity ?? CoupleCity.city(id: partnerCityID) }
     var partnerProfile: UserProfile? {
         guard let myProfile,
               case .connected(let connection) = connectionStatus else { return nil }
@@ -37,11 +47,25 @@ final class WayToYouStore {
         if case .connected = connectionStatus { return true }
         return false
     }
-
+    var activeConnectionID: UUID? {
+        guard case .connected(let connection) = connectionStatus else { return nil }
+        return connection.id
+    }
+    #if DEBUG
+    var isDebugSession: Bool { debugAccount != nil }
+    #endif
     private let defaults: UserDefaults
     private let localConnectionService: any ConnectionServicing
     private var backendConnectionService: SupabaseConnectionService?
     private var activeUserID: UUID?
+    private var hasSyncedHearts = false
+    private var hasSyncedSignals = false
+    private var avatarRevisionByUserID: [UUID: String] = [:]
+    private var lastPublishedBatteryReading: DeviceBatteryReading?
+    private var lastPresencePublishAt: Date?
+    #if DEBUG
+    private var debugAccount: DebugAccount?
+    #endif
 
     private enum Key {
         static let myProfile = "wty.myProfile"
@@ -50,6 +74,7 @@ final class WayToYouStore {
         static let partner = "wty.partnerCityID"
         static let parcels = "wty.parcels"
         static let signals = "wty.signals"
+        static let heartBursts = "wty.heartBursts"
         static let demoMode = "wty.demoMode"
     }
 
@@ -58,14 +83,15 @@ final class WayToYouStore {
         static let flightDuration: TimeInterval = 100
         static let partnerOpensAfter: TimeInterval = 18
         static let replyLeavesAfter: TimeInterval = 22
-        static let signalReplyAfter: TimeInterval = 26
     }
 
     private enum Live {
         static let partnerOpensAfter: TimeInterval = 45 * 60
         static let replyLeavesAfter: TimeInterval = 3 * 60 * 60
-        static let signalReplyAfter: TimeInterval = 40 * 60
     }
+
+    /// 같은 배터리 값이라도 이 주기마다 한 번씩 서버 timestamp를 갱신해 freshness를 유지한다.
+    private static let presenceSameValueRefreshInterval: TimeInterval = 5 * 60
 
     init(
         defaults: UserDefaults = .standard,
@@ -83,6 +109,7 @@ final class WayToYouStore {
         demoMode = defaults.object(forKey: Key.demoMode) as? Bool ?? true
         parcels = Self.decode([Parcel].self, from: defaults.data(forKey: Key.parcels)) ?? []
         signals = Self.decode([SignalEvent].self, from: defaults.data(forKey: Key.signals)) ?? []
+        heartBursts = Self.decode([HeartBurst].self, from: defaults.data(forKey: Key.heartBursts)) ?? []
 
         if let myProfile {
             homeCityID = myProfile.cityID
@@ -96,6 +123,36 @@ final class WayToYouStore {
             defaults.set(Self.encode(connectionStatus), forKey: Key.connectionStatus)
         }
     }
+
+    #if DEBUG
+    convenience init(debugAccount: DebugAccount) {
+        self.init(defaults: debugAccount.defaults)
+        self.debugAccount = debugAccount
+
+        var profile = debugAccount.profile
+        var partner = debugAccount.partnerProfile
+        if let city = DebugCityLaunchOverride.myCity {
+            profile.city = city
+        }
+        if let city = DebugCityLaunchOverride.partnerCity {
+            partner.city = city
+        }
+        activeUserID = profile.id
+        myProfile = profile
+        homeCityID = profile.cityID
+        partnerCityID = partner.cityID
+        var connection = debugAccount.connection
+        connection.members = connection.members.map { member in
+            if member.id == profile.id { return profile }
+            if member.id == partner.id { return partner }
+            return member
+        }
+        connectionStatus = .connected(connection)
+        backendIsReady = true
+        demoMode = true
+        save()
+    }
+    #endif
 
     // MARK: - Derived state
 
@@ -120,6 +177,12 @@ final class WayToYouStore {
 
     func latestSignal(_ direction: ParcelDirection, at date: Date) -> SignalEvent? {
         signals
+            .filter { $0.direction == direction && $0.isFresh(at: date) }
+            .max { $0.sentAt < $1.sentAt }
+    }
+
+    func latestHeartBurst(_ direction: ParcelDirection, at date: Date) -> HeartBurst? {
+        heartBursts
             .filter { $0.direction == direction && $0.isFresh(at: date) }
             .max { $0.sentAt < $1.sentAt }
     }
@@ -172,6 +235,10 @@ final class WayToYouStore {
         demoMode ? Demo.flightDuration : CoupleDistance.deliveryDuration(from: homeCity, to: partnerCity)
     }
 
+    func avatarData(for profile: UserProfile) -> Data? {
+        avatarDataByUserID[profile.id]
+    }
+
     // MARK: - Intents
 
     /// 인증 계정마다 로컬 캐시를 분리하고, 서버의 최신 프로필·연결 상태를 불러온다.
@@ -182,35 +249,92 @@ final class WayToYouStore {
         if activeUserID != userID {
             activeUserID = userID
             loadActiveUserState()
+            avatarDataByUserID = [:]
+            avatarRevisionByUserID = [:]
         }
 
         await refreshConnection()
         backendIsReady = true
     }
 
-    func saveProfile(displayName: String, cityID: String) {
+    func saveProfile(
+        displayName: String,
+        city: RouteCity,
+        defaultAirport: RouteAirport
+    ) {
         let cleanedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedName.isEmpty else { return }
 
         if var profile = myProfile {
             profile.displayName = cleanedName
-            profile.cityID = cityID
+            profile.city = city
+            profile.defaultAirport = defaultAirport
             myProfile = profile
         } else {
             myProfile = UserProfile(
                 id: activeUserID ?? UUID(),
                 displayName: cleanedName,
-                cityID: cityID
+                city: city,
+                defaultAirport: defaultAirport
             )
         }
-        homeCityID = cityID
+        homeCityID = city.id
         synchronizeMyProfileIntoConnection()
         save()
     }
 
+    #if DEBUG
+    /// UI 테스트 중 재실행 없이 두 사람의 위치를 바꾼다.
+    /// DEBUG 가상 계정에서만 동작하며 서버에는 어떤 값도 전송하지 않는다.
+    func setDebugCity(_ city: RouteCity, for target: DebugCityTarget) {
+        guard debugAccount != nil,
+              let myProfile,
+              case .connected(var connection) = connectionStatus else { return }
+
+        switch target {
+        case .mine:
+            var updatedProfile = myProfile
+            updatedProfile.city = city
+            self.myProfile = updatedProfile
+            homeCityID = city.id
+            connection.members = connection.members.map { member in
+                member.id == updatedProfile.id ? updatedProfile : member
+            }
+
+        case .partner:
+            guard let partner = connection.partner(for: myProfile.id) else { return }
+            connection.members = connection.members.map { member in
+                guard member.id == partner.id else { return member }
+                var updatedPartner = member
+                updatedPartner.city = city
+                return updatedPartner
+            }
+            partnerCityID = city.id
+        }
+
+        connectionStatus = .connected(connection)
+        save()
+    }
+    #endif
+
     @discardableResult
-    func saveProfileToBackend(displayName: String, cityID: String) async -> Bool {
+    func saveProfileToBackend(
+        displayName: String,
+        city: RouteCity,
+        defaultAirport: RouteAirport
+    ) async -> Bool {
         let cleanedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        #if DEBUG
+        if debugAccount != nil {
+            guard !cleanedName.isEmpty else { return false }
+            saveProfile(
+                displayName: cleanedName,
+                city: city,
+                defaultAirport: defaultAirport
+            )
+            return true
+        }
+        #endif
         guard !cleanedName.isEmpty, let backendConnectionService else { return false }
 
         connectionIsWorking = true
@@ -220,7 +344,8 @@ final class WayToYouStore {
         do {
             let profile = try await backendConnectionService.saveProfile(
                 displayName: cleanedName,
-                cityID: cityID
+                city: city,
+                defaultAirport: defaultAirport
             )
             myProfile = profile
             homeCityID = profile.cityID
@@ -230,6 +355,109 @@ final class WayToYouStore {
         } catch {
             connectionMessage = Self.friendlyConnectionError(error)
             return false
+        }
+    }
+
+    @discardableResult
+    func uploadProfileAvatar(_ data: Data) async -> Bool {
+        #if DEBUG
+        if debugAccount != nil, var profile = myProfile {
+            avatarIsWorking = true
+            defer { avatarIsWorking = false }
+            profile.avatarPath = "debug/\(profile.id.uuidString.lowercased())/avatar.jpg"
+            profile.avatarUpdatedAt = .now
+            applyMyProfile(profile)
+            avatarDataByUserID[profile.id] = data
+            avatarRevisionByUserID[profile.id] = Self.avatarRevision(for: profile)
+            return true
+        }
+        #endif
+        guard let backendConnectionService, let activeUserID else { return false }
+
+        avatarIsWorking = true
+        avatarMessage = nil
+        defer { avatarIsWorking = false }
+
+        do {
+            let profile = try await backendConnectionService.uploadProfileAvatar(
+                data: data,
+                userID: activeUserID
+            )
+            applyMyProfile(profile)
+            avatarDataByUserID[profile.id] = data
+            avatarRevisionByUserID[profile.id] = Self.avatarRevision(for: profile)
+            return true
+        } catch {
+            avatarMessage = Self.friendlyAvatarError(error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func clearProfileAvatar() async -> Bool {
+        #if DEBUG
+        if debugAccount != nil, var profile = myProfile {
+            avatarIsWorking = true
+            defer { avatarIsWorking = false }
+            profile.avatarPath = nil
+            profile.avatarUpdatedAt = .now
+            applyMyProfile(profile)
+            avatarDataByUserID.removeValue(forKey: profile.id)
+            avatarRevisionByUserID.removeValue(forKey: profile.id)
+            return true
+        }
+        #endif
+        guard let backendConnectionService, let activeUserID else { return false }
+
+        avatarIsWorking = true
+        avatarMessage = nil
+        defer { avatarIsWorking = false }
+
+        do {
+            let profile = try await backendConnectionService.clearProfileAvatar(userID: activeUserID)
+            applyMyProfile(profile)
+            avatarDataByUserID.removeValue(forKey: profile.id)
+            avatarRevisionByUserID.removeValue(forKey: profile.id)
+            return true
+        } catch {
+            avatarMessage = Self.friendlyAvatarError(error)
+            return false
+        }
+    }
+
+    func clearAvatarMessage() {
+        avatarMessage = nil
+    }
+
+    func refreshProfileAvatars() async {
+        guard let backendConnectionService else { return }
+
+        let profiles = [myProfile, partnerProfile].compactMap { $0 }
+        let activeIDs = Set(profiles.map(\.id))
+        avatarDataByUserID = avatarDataByUserID.filter { activeIDs.contains($0.key) }
+        avatarRevisionByUserID = avatarRevisionByUserID.filter { activeIDs.contains($0.key) }
+
+        for profile in profiles {
+            guard let path = profile.avatarPath else {
+                avatarDataByUserID.removeValue(forKey: profile.id)
+                avatarRevisionByUserID.removeValue(forKey: profile.id)
+                continue
+            }
+
+            let revision = Self.avatarRevision(for: profile)
+            guard avatarRevisionByUserID[profile.id] != revision else { continue }
+
+            do {
+                let remoteData = try await backendConnectionService.downloadProfileAvatar(
+                    path: path,
+                    updatedAt: profile.avatarUpdatedAt
+                )
+                let displayData = try ProfileAvatarProcessor.jpegData(from: remoteData)
+                avatarDataByUserID[profile.id] = displayData
+                avatarRevisionByUserID[profile.id] = revision
+            } catch {
+                // 네트워크가 잠깐 끊겨도 이미 표시 중인 사진은 유지한다.
+            }
         }
     }
 
@@ -285,6 +513,7 @@ final class WayToYouStore {
                 return false
             }
             applyRemoteConnectionState(state)
+            await refreshProfileAvatars()
             return isConnected
         } catch {
             connectionMessage = Self.friendlyConnectionError(error)
@@ -299,27 +528,12 @@ final class WayToYouStore {
         do {
             let state = try await backendConnectionService.connectionState()
             applyRemoteConnectionState(state)
+            await refreshProfileAvatars()
             connectionMessage = nil
         } catch {
             connectionMessage = Self.friendlyConnectionError(error)
         }
     }
-
-    #if DEBUG
-    /// 두 번째 기기와 서버가 준비되기 전, 연결 완료 뒤의 기존 앱을 검증하는 전용 경로.
-    func simulatePartnerConnection(now: Date = .now) {
-        guard let myProfile else { return }
-        let fallbackCity = CoupleCity.presets.first { $0.id != myProfile.cityID && $0.id == partnerCityID }
-            ?? CoupleCity.presets.first { $0.id != myProfile.cityID }
-            ?? CoupleCity.city(id: "paris")
-        let partner = UserProfile(displayName: "상대", cityID: fallbackCity.id)
-        connectionStatus = .connected(
-            CoupleConnection(members: [myProfile, partner], connectedAt: now)
-        )
-        partnerCityID = partner.cityID
-        save()
-    }
-    #endif
 
     func sendParcel(title: String, message: String, wrap: ParcelWrap, now: Date = .now) {
         let parcel = Parcel(
@@ -342,41 +556,234 @@ final class WayToYouStore {
         save()
     }
 
-    func sendSignal(_ signal: CoupleSignal, now: Date = .now) {
-        signals.append(SignalEvent(signal: signal, direction: .outgoing, sentAt: now))
-        trimSignals()
-        save()
+    @discardableResult
+    func sendSignal(_ signal: CoupleSignal) async -> Bool {
+        #if DEBUG
+        if debugAccount != nil {
+            let event = SignalEvent(
+                id: UUID(),
+                signal: signal,
+                direction: .outgoing,
+                sentAt: .now
+            )
+            signals.append(event)
+            trimSignals()
+            save()
+            return true
+        }
+        #endif
+        guard isConnected, let backendConnectionService, let activeUserID else { return false }
+
+        signalMessage = nil
+
+        do {
+            let remote = try await backendConnectionService.sendSignal(signal)
+            let event = SignalEvent(
+                id: remote.id,
+                signal: remote.signal,
+                direction: remote.senderID == activeUserID ? .outgoing : .incoming,
+                sentAt: remote.sentAt
+            )
+            if !signals.contains(where: { $0.id == event.id }) {
+                signals.append(event)
+                trimSignals()
+                save()
+            }
+            return true
+        } catch {
+            signalMessage = Self.friendlySignalError(error)
+            return false
+        }
     }
 
-    func updateCities(home: String, partner: String) {
-        guard home != homeCityID || partner != partnerCityID else { return }
-        homeCityID = home
-        partnerCityID = partner
-        if var profile = myProfile {
-            profile.cityID = home
-            myProfile = profile
-        }
-        if case .connected(var connection) = connectionStatus,
-           let myProfile {
-            connection.members = connection.members.map { member in
-                if member.id == myProfile.id { return myProfile }
-                var partnerProfile = member
-                partnerProfile.cityID = partner
-                return partnerProfile
+    /// 앱이 활성화된 동안 두 사람의 최근 상태를 동기화한다.
+    /// 최초 동기화는 과거 알림을 울리지 않고, 이후 새로 온 상태만 반환한다.
+    @discardableResult
+    func refreshSignals() async -> [SignalEvent] {
+        guard isConnected, let backendConnectionService, let activeUserID else { return [] }
+
+        do {
+            let previousIDs = Set(signals.map(\.id))
+            let remote = try await backendConnectionService.listSignals()
+            let fetched = remote.map { event in
+                SignalEvent(
+                    id: event.id,
+                    signal: event.signal,
+                    direction: event.senderID == activeUserID ? .outgoing : .incoming,
+                    sentAt: event.sentAt
+                )
             }
-            connectionStatus = .connected(connection)
+            let receivedSignals = hasSyncedSignals ? fetched.filter {
+                $0.direction == .incoming && !previousIDs.contains($0.id)
+            } : []
+            signals = fetched
+            hasSyncedSignals = true
+            trimSignals()
+            save()
+            return receivedSignals
+        } catch {
+            return []
         }
-        // 경로가 바뀌면 아직 하늘에 있는 소포는 갈 곳을 잃는다. 도착 처리해서 기록에 남긴다.
-        let now = Date()
-        for index in parcels.indices where parcels[index].isActive(at: now) {
-            parcels[index].arrivesAt = now
+    }
+
+    func clearSignalMessage() {
+        signalMessage = nil
+    }
+
+    // MARK: - Device Presence
+
+    /// 상태 변화는 즉시 올리고, 같은 값은 최대 5분에 한 번만 서버 timestamp를 갱신한다.
+    /// 시각은 항상 서버가 찍는다. 실패는 조용히 넘어가고 다음 변화나 주기에서 다시 시도한다.
+    func publishDevicePresence(_ reading: DeviceBatteryReading, now: Date = .now) async {
+        #if DEBUG
+        if debugAccount != nil {
+            myDevicePresence = DevicePresence(
+                batteryLevel: reading.level,
+                batteryState: reading.state,
+                updatedAt: now
+            )
+            return
         }
-        save()
+        #endif
+        guard isConnected, let backendConnectionService else { return }
+
+        let valueChanged = lastPublishedBatteryReading != reading
+        let refreshDue = now.timeIntervalSince(lastPresencePublishAt ?? .distantPast)
+            >= Self.presenceSameValueRefreshInterval
+        guard valueChanged || refreshDue else { return }
+
+        do {
+            let remote = try await backendConnectionService.setDevicePresence(
+                batteryLevel: reading.level,
+                batteryState: reading.state
+            )
+            myDevicePresence = remote.presence
+            lastPublishedBatteryReading = reading
+            lastPresencePublishAt = now
+        } catch {
+            // 배터리 공유 실패가 다른 흐름을 막으면 안 된다.
+        }
+    }
+
+    /// 앱이 활성화된 동안 상대의 최근 배터리 상태를 가볍게 동기화한다.
+    func refreshPartnerDevicePresence() async {
+        #if DEBUG
+        if let debugAccount {
+            partnerDevicePresence = debugAccount.partnerPresenceFixture
+            return
+        }
+        #endif
+        guard isConnected, let backendConnectionService else { return }
+
+        do {
+            partnerDevicePresence = try await backendConnectionService
+                .partnerDevicePresence()?.presence
+        } catch {
+            // 네트워크가 잠깐 끊겨도 표시 중인 값은 유지한다. 오래되면 freshness가 가려준다.
+        }
+    }
+
+    /// 배터리 공유 끄기. 서버 row를 지우고 내 표시도 내린다.
+    @discardableResult
+    func clearDevicePresence() async -> Bool {
+        #if DEBUG
+        if debugAccount != nil {
+            myDevicePresence = nil
+            return true
+        }
+        #endif
+        guard let backendConnectionService else { return false }
+
+        do {
+            try await backendConnectionService.clearDevicePresence()
+            myDevicePresence = nil
+            lastPublishedBatteryReading = nil
+            lastPresencePublishAt = nil
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    @discardableResult
+    func sendHeartBurst(count: Int) async -> Bool {
+        #if DEBUG
+        if debugAccount != nil {
+            let burst = HeartBurst(
+                id: UUID(),
+                direction: .outgoing,
+                count: min(max(count, 1), 50),
+                sentAt: .now
+            )
+            heartBursts.append(burst)
+            trimHeartBursts()
+            save()
+            return true
+        }
+        #endif
+        guard isConnected, let backendConnectionService, let activeUserID else { return false }
+        let boundedCount = min(max(count, 1), 50)
+
+        heartMessage = nil
+
+        do {
+            let remote = try await backendConnectionService.sendHeartBurst(count: boundedCount)
+            let burst = HeartBurst(
+                id: remote.id,
+                direction: remote.senderID == activeUserID ? .outgoing : .incoming,
+                count: remote.count,
+                sentAt: remote.sentAt
+            )
+            if !heartBursts.contains(where: { $0.id == burst.id }) {
+                heartBursts.append(burst)
+                trimHeartBursts()
+                save()
+            }
+            return true
+        } catch {
+            heartMessage = Self.friendlyHeartError(error)
+            return false
+        }
+    }
+
+    /// 앱이 활성화된 동안 서버의 최근 Heart Burst를 가볍게 동기화한다.
+    /// 읽음 상태는 만들지 않고, 새로 도착했는지만 호출자에게 알려준다.
+    @discardableResult
+    func refreshHeartBursts() async -> [HeartBurst] {
+        guard isConnected, let backendConnectionService, let activeUserID else { return [] }
+
+        do {
+            let previousIDs = Set(heartBursts.map(\.id))
+            let remote = try await backendConnectionService.listHeartBursts()
+            let fetched = remote.map { burst in
+                HeartBurst(
+                    id: burst.id,
+                    direction: burst.senderID == activeUserID ? .outgoing : .incoming,
+                    count: burst.count,
+                    sentAt: burst.sentAt
+                )
+            }
+            let receivedBursts = hasSyncedHearts ? fetched.filter {
+                $0.direction == .incoming && !previousIDs.contains($0.id)
+            } : []
+            heartBursts = fetched
+            hasSyncedHearts = true
+            trimHeartBursts()
+            save()
+            return receivedBursts
+        } catch {
+            return []
+        }
+    }
+
+    func clearHeartMessage() {
+        heartMessage = nil
     }
 
     func clearHistory() {
         parcels = []
         signals = []
+        heartBursts = []
         save()
     }
 
@@ -391,7 +798,6 @@ final class WayToYouStore {
 
         let opensAfter = demoMode ? Demo.partnerOpensAfter : Live.partnerOpensAfter
         let replyAfter = demoMode ? Demo.replyLeavesAfter : Live.replyLeavesAfter
-        let signalAfter = demoMode ? Demo.signalReplyAfter : Live.signalReplyAfter
 
         // 1. 상대가 내 소포를 열어본다.
         for index in parcels.indices
@@ -418,23 +824,6 @@ final class WayToYouStore {
             changed = true
         }
 
-        // 3. 내가 보낸 시그널에 상대가 한 번 답한다.
-        let answeredSignals = Set(signals.compactMap(\.replyToID))
-        for origin in signals where origin.direction == .outgoing && !answeredSignals.contains(origin.id) {
-            let moment = origin.sentAt.addingTimeInterval(signalAfter)
-            guard now >= moment else { continue }
-            signals.append(
-                SignalEvent(
-                    signal: Self.partnerResponse(to: origin.signal),
-                    direction: .incoming,
-                    sentAt: moment,
-                    replyToID: origin.id,
-                    isSimulated: true
-                )
-            )
-            changed = true
-        }
-
         if changed {
             trimSignals()
             save()
@@ -458,17 +847,6 @@ final class WayToYouStore {
             replyToID: origin.id,
             isSimulated: true
         )
-    }
-
-    private static func partnerResponse(to signal: CoupleSignal) -> CoupleSignal {
-        switch signal {
-        case .thinking: .missYou
-        case .missYou: .hug
-        case .busy: .cheering
-        case .resting: .resting
-        case .cheering: .hug
-        case .hug: .missYou
-        }
     }
 
     private static let replyWraps: [ParcelWrap] = [.lavender, .sage, .midnight, .coral]
@@ -505,6 +883,13 @@ final class WayToYouStore {
         }
     }
 
+    private func trimHeartBursts() {
+        heartBursts.sort { $0.sentAt < $1.sentAt }
+        if heartBursts.count > 40 {
+            heartBursts.removeFirst(heartBursts.count - 40)
+        }
+    }
+
     private func save() {
         defaults.set(Self.encode(myProfile), forKey: storageKey(Key.myProfile))
         defaults.set(Self.encode(connectionStatus), forKey: storageKey(Key.connectionStatus))
@@ -512,6 +897,7 @@ final class WayToYouStore {
         defaults.set(partnerCityID, forKey: storageKey(Key.partner))
         defaults.set(Self.encode(parcels), forKey: storageKey(Key.parcels))
         defaults.set(Self.encode(signals), forKey: storageKey(Key.signals))
+        defaults.set(Self.encode(heartBursts), forKey: storageKey(Key.heartBursts))
     }
 
     private static func encode<T: Encodable>(_ value: T) -> Data? {
@@ -532,6 +918,18 @@ final class WayToYouStore {
         connectionStatus = .connected(connection)
     }
 
+    private func applyMyProfile(_ profile: UserProfile) {
+        myProfile = profile
+        homeCityID = profile.cityID
+        synchronizeMyProfileIntoConnection()
+        save()
+    }
+
+    private static func avatarRevision(for profile: UserProfile) -> String {
+        let timestamp = profile.avatarUpdatedAt?.timeIntervalSince1970 ?? 0
+        return "\(profile.avatarPath ?? "none")|\(timestamp)"
+    }
+
     private func storageKey(_ base: String) -> String {
         guard let activeUserID else { return base }
         return "wty.user.\(activeUserID.uuidString).\(base)"
@@ -548,6 +946,16 @@ final class WayToYouStore {
         demoMode = defaults.object(forKey: storageKey(Key.demoMode)) as? Bool ?? true
         parcels = Self.decode([Parcel].self, from: defaults.data(forKey: storageKey(Key.parcels))) ?? []
         signals = Self.decode([SignalEvent].self, from: defaults.data(forKey: storageKey(Key.signals))) ?? []
+        heartBursts = Self.decode(
+            [HeartBurst].self,
+            from: defaults.data(forKey: storageKey(Key.heartBursts))
+        ) ?? []
+        hasSyncedHearts = false
+        hasSyncedSignals = false
+        myDevicePresence = nil
+        partnerDevicePresence = nil
+        lastPublishedBatteryReading = nil
+        lastPresencePublishAt = nil
 
         if let myProfile {
             homeCityID = myProfile.cityID
@@ -562,6 +970,8 @@ final class WayToYouStore {
     }
 
     private func applyRemoteConnectionState(_ state: RemoteConnectionState) {
+        let previousConnectionID = activeConnectionID
+
         if let profile = state.me?.profile {
             myProfile = profile
             homeCityID = profile.cityID
@@ -598,6 +1008,13 @@ final class WayToYouStore {
             connectionStatus = .notConnected
         }
 
+        if activeConnectionID != previousConnectionID {
+            myDevicePresence = nil
+            partnerDevicePresence = nil
+            lastPublishedBatteryReading = nil
+            lastPresencePublishAt = nil
+        }
+
         save()
     }
 
@@ -623,6 +1040,42 @@ final class WayToYouStore {
         default:
             "서버 연결을 완료하지 못했어요. 잠시 후 다시 시도해주세요."
         }
+    }
+
+    private static func friendlyHeartError(_ error: Error) -> String {
+        if let postgrestError = error as? PostgrestError,
+           postgrestError.message == "connection_required" {
+            return "상대와 연결된 뒤 Heart를 보낼 수 있어요."
+        }
+        return "Heart를 보내지 못했어요. 잠시 후 다시 시도해주세요."
+    }
+
+    private static func friendlySignalError(_ error: Error) -> String {
+        if let postgrestError = error as? PostgrestError {
+            switch postgrestError.message {
+            case "connection_required":
+                return "상대와 연결된 뒤 Signal을 보낼 수 있어요."
+            case "invalid_signal_type":
+                return "Signal 종류를 다시 선택해주세요."
+            default:
+                break
+            }
+        }
+        return "Signal을 보내지 못했어요. 잠시 후 다시 시도해주세요."
+    }
+
+    private static func friendlyAvatarError(_ error: Error) -> String {
+        if let postgrestError = error as? PostgrestError {
+            switch postgrestError.message {
+            case "profile_required":
+                return "이름과 도시를 먼저 저장해주세요."
+            case "avatar_upload_required":
+                return "사진 업로드가 완료되지 않았어요. 다시 선택해주세요."
+            default:
+                break
+            }
+        }
+        return "프로필 사진을 저장하지 못했어요. 잠시 후 다시 시도해주세요."
     }
 
     private static func partnerProfile(
