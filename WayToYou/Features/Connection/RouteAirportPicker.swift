@@ -32,7 +32,7 @@ struct RouteAirportPicker: View {
                                 .foregroundStyle(Palette.textPrimary)
                                 .fixedSize(horizontal: false, vertical: true)
 
-                            Text("소포마다 다시 고르지 않아도 되고, 필요할 때 언제든 바꿀 수 있어요.")
+                            Text("필요할 때 언제든 바꿀 수 있어요.")
                                 .font(.rounded(.subheadline))
                                 .foregroundStyle(Palette.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
