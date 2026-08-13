@@ -34,10 +34,13 @@ struct SignalPickerSheet: View {
     @State private var dragOffset: CGFloat = 0
     /// 키를 누르면 눌리기만 하고, 보내는 것은 엔터가 맡는다.
     @State private var stagedSignal: CoupleSignal?
+    /// 한 번이라도 키를 만졌는지. 골랐다가 풀면 아무것도 눌리지 않은 상태로 돌아가야 하는데,
+    /// 그때 마지막으로 보낸 신호가 다시 켜지면 풀린 것처럼 보이지 않는다.
+    @State private var hasTouchedKeys = false
 
-    /// 지금 램프가 켜져 있어야 하는 신호. 고른 것이 없으면 마지막으로 보낸 것.
+    /// 지금 램프가 켜져 있어야 하는 신호. 손대기 전에는 마지막으로 보낸 것.
     private var activeSignal: CoupleSignal? {
-        stagedSignal ?? selectedSignal
+        hasTouchedKeys ? stagedSignal : selectedSignal
     }
 
     var body: some View {
@@ -47,6 +50,7 @@ struct SignalPickerSheet: View {
             .onChange(of: isPresented) { _, presented in
                 if !presented {
                     stagedSignal = nil
+                    hasTouchedKeys = false
                     isEditingKeys = false
                 }
             }
@@ -72,7 +76,8 @@ struct SignalPickerSheet: View {
             DisplayPanel(
                 value: distanceDigits,
                 unit: "KM",
-                title: isEditingKeys ? "EDIT KEYS" : "TO \(partnerName)",
+                topLeft: isEditingKeys ? "EDIT" : "TO",
+                topRight: isEditingKeys ? "KEYS" : partnerName,
                 bottomLeft: isEditingKeys ? "EMOJI" : partnerClock,
                 bottomRight: isEditingKeys ? "+ LABEL" : partnerCityName
             )
@@ -82,7 +87,7 @@ struct SignalPickerSheet: View {
                 activeSignal: activeSignal,
                 isEditing: isEditingKeys,
                 canSend: stagedSignal != nil,
-                onStage: { stagedSignal = $0 },
+                onStage: stage,
                 onSend: send,
                 onEdit: beginEditing
             )
@@ -130,6 +135,12 @@ struct SignalPickerSheet: View {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             isEditingKeys.toggle()
         }
+    }
+
+    /// 눌린 키를 다시 누르면 풀린다.
+    private func stage(_ signal: CoupleSignal) {
+        hasTouchedKeys = true
+        stagedSignal = stagedSignal == signal ? nil : signal
     }
 
     /// 엔터를 눌러야 실제로 나간다. 고른 것이 없으면 그냥 내려간다.
@@ -282,7 +293,8 @@ private struct GearButton: View {
 private struct DisplayPanel: View {
     let value: String
     let unit: String
-    let title: String
+    let topLeft: String
+    let topRight: String
     let bottomLeft: String
     let bottomRight: String
 
@@ -290,7 +302,7 @@ private struct DisplayPanel: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            LabelStrip(left: title, right: "")
+            LabelStrip(left: topLeft, right: topRight)
             readout
             LabelStrip(left: bottomLeft, right: bottomRight)
         }
@@ -638,7 +650,7 @@ private struct KeycapFace: View {
         } else if isEditing {
             Image(systemName: "pencil")
                 .font(.system(size: 13, weight: .black))
-                .foregroundStyle(Keypad.led)
+                .foregroundStyle(.white.opacity(0.55))
                 .padding(6)
         }
     }
