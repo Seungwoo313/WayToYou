@@ -331,11 +331,12 @@ struct ContentView: View {
 
     private var isSignalOpen: Bool { route.presented == .signal }
 
-    /// 올라올 때는 살짝 튕기고, 내려갈 때는 미련 없이 빠진다.
+    /// 튕김 없이 부드럽게 서고, 내려갈 때는 미련 없이 빠진다.
+    /// 오버슈트는 화려해 보이지만 되돌아오는 구간에서 프레임이 튀는 게 그대로 드러난다.
     private var signalMachineMotion: Animation {
         isSignalOpen
-            ? .spring(response: 0.38, dampingFraction: 0.74)
-            : .easeIn(duration: 0.2)
+            ? .spring(response: 0.36, dampingFraction: 0.92)
+            : .easeIn(duration: 0.18)
     }
 
     /// 기계 밖을 누르면 내려간다. 지구를 가리지 않게 옅게만 덮는다.

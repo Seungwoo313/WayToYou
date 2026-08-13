@@ -64,9 +64,14 @@ struct SignalPickerSheet: View {
         }
         .padding(Keypad.chassisPadding)
         .background(ChassisSurface())
-        // 기계 전체를 한 장으로 합성한다. 올라오고 내려갈 때 텍스처 하나만 움직이면 되므로
+        // 기계 전체를 텍스처 한 장으로 굳힌다. 올라오고 내려갈 때 그 한 장만 움직이면 되므로
         // 알갱이·그림자·번짐을 매 프레임 다시 그리지 않는다.
-        .compositingGroup()
+        // 여백을 줬다 빼는 건 바깥으로 번지는 그림자가 잘리지 않게 하려는 것이다.
+        .padding(.horizontal, Keypad.rasterMargin)
+        .padding(.vertical, Keypad.rasterMargin)
+        .drawingGroup()
+        .padding(.horizontal, -Keypad.rasterMargin)
+        .padding(.vertical, -Keypad.rasterMargin)
         .frame(maxWidth: Keypad.chassisMaxWidth)
         .padding(.horizontal, Metric.screenPadding)
         .padding(.bottom, Keypad.chassisThickness + Metric.m)
@@ -443,33 +448,18 @@ private struct KeyWell: View {
     let onSelect: (CoupleSignal) -> Void
     let onEdit: (Int) -> Void
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: Keypad.keyGap), count: 3)
     private let shape = RoundedRectangle(cornerRadius: Keypad.wellRadius, style: .continuous)
 
+    /// 아홉 개뿐이라 lazy로 둘 이유가 없다. `LazyVGrid`는 키캡을 몸통과 따로
+    /// 나타나게 만들어서 기계가 두 번에 나눠 올라오는 것처럼 보인다.
     var body: some View {
-        LazyVGrid(columns: columns, spacing: Keypad.keyGap) {
-            ForEach(Array(keys.enumerated()), id: \.offset) { index, key in
-                Button {
-                    if isEditing {
-                        onEdit(index)
-                    } else {
-                        onSelect(key.signal)
+        VStack(spacing: Keypad.keyGap) {
+            ForEach(0..<3, id: \.self) { row in
+                HStack(spacing: Keypad.keyGap) {
+                    ForEach(0..<3, id: \.self) { column in
+                        keycap(at: row * 3 + column)
                     }
-                } label: {
-                    KeycapFace(
-                        emoji: key.emoji,
-                        isSelected: !isEditing && key.signal == selectedSignal,
-                        isEditing: isEditing
-                    )
                 }
-                .buttonStyle(KeycapPress())
-                .onLongPressGesture(minimumDuration: 0.45) {
-                    UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-                    onEdit(index)
-                }
-                .accessibilityLabel(key.label.isEmpty ? key.signal.title : key.label)
-                .accessibilityValue(key.signal == selectedSignal ? "현재 내 Signal" : "")
-                .accessibilityHint("길게 누르면 이 키를 바꿔요")
             }
         }
         .padding(Keypad.wellPadding)
@@ -478,6 +468,34 @@ private struct KeyWell: View {
                 .fill(Keypad.wellFill)
                 .innerShadow(radius: Keypad.wellRadius, color: .black.opacity(0.6), width: 8)
                 .overlay { shape.strokeBorder(Keypad.recessEdge, lineWidth: 1.2) }
+        }
+    }
+
+    @ViewBuilder
+    private func keycap(at index: Int) -> some View {
+        if keys.indices.contains(index) {
+            let key = keys[index]
+            Button {
+                if isEditing {
+                    onEdit(index)
+                } else {
+                    onSelect(key.signal)
+                }
+            } label: {
+                KeycapFace(
+                    emoji: key.emoji,
+                    isSelected: !isEditing && key.signal == selectedSignal,
+                    isEditing: isEditing
+                )
+            }
+            .buttonStyle(KeycapPress())
+            .onLongPressGesture(minimumDuration: 0.45) {
+                UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+                onEdit(index)
+            }
+            .accessibilityLabel(key.label.isEmpty ? key.signal.title : key.label)
+            .accessibilityValue(key.signal == selectedSignal ? "현재 내 Signal" : "")
+            .accessibilityHint("길게 누르면 이 키를 바꿔요")
         }
     }
 }
@@ -632,6 +650,8 @@ private enum Keypad {
     /// 손에 잡히는 기계로 보이려면 화면 폭을 다 먹으면 안 된다.
     static let chassisMaxWidth: CGFloat = 330
     static let chassisRim: CGFloat = 7
+    /// 텍스처로 굳힐 때 바깥 그림자가 잘리지 않도록 잡아 두는 여백.
+    static let rasterMargin: CGFloat = 34
     /// 테두리가 배경 안쪽으로 들어오므로 내용은 테두리 두께만큼 더 물러난다.
     static let chassisPadding: CGFloat = 18
     static let chassisGap: CGFloat = 13
