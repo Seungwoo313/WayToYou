@@ -1,5 +1,7 @@
 # Way to You
 
+> 문서 상태: 초기 제품 콘셉트 기록. 현재 구현·우선순위와 충돌하면 `docs/way-to-you-plan-v2.md`, `docs/current-progress.md`, `docs/next-session-handoff.md`를 따른다.
+
 > **Some things are worth waiting for.**  
 > 빠르게 소비되는 메시지 대신, 기다리고 간직할 수 있는 마음을 보내는 iOS 커플 앱.
 
@@ -55,12 +57,12 @@ Way to You:
 
 - **No instant chat.**
 - 짧은 실시간 대화창은 만들지 않는다.
-- 짧은 감정 표현은 Signal/Ping으로 끝낸다.
+- 짧은 감정 표현은 Heart/Signal로 끝낸다.
 - 할 말이 많으면 Letter를 만든다.
 - 목소리를 남기고 싶으면 Voice Tape을 만든다.
 - 순간을 남기고 싶으면 Polaroid를 만든다.
 - 여러 기억을 보내고 싶으면 Box를 만든다.
-- Signal은 지나가고, 의미 있는 것들은 Archive에 남는다.
+- Signal은 지나가고, 의미 있는 것들은 Keepsakes에 남는다.
 
 ---
 

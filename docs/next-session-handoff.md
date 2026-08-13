@@ -1,20 +1,20 @@
 # Way to You — 다음 채팅 인수인계
 
-작성일: 2026-08-12
+작성일: 2026-08-13
 
 작업 폴더: `/Users/seungwoo/Desktop/WayToYou`
 
-브랜치: `codex/product-plan-mvp`
+브랜치: `codex/minor-change`
 
-Device Presence 구현 직전 기준 HEAD: `8367f0a feat: refine globe signal markers and notifications`
+최신 기능 병합 기준: `2c2fd0c Merge pull request #3 from Seungwoo313/codex/product-plan-mvp`
 
 이 문서는 다음 채팅에서 현재 작업을 다시 조사하지 않고 곧바로 이어가기 위한 기준 문서다. 다음 작업을 시작할 때 이 문서와 `git status`, 최근 `git log`를 먼저 확인한다.
 
 ## 1. 지금 바로 이어서 할 일
 
-> **2026-08-12 업데이트**: Device Presence와 수동 QA를 완료했고, 프로필 도시·기본 배송 공항 분리 migration도 원격 DB에 적용했다. local/remote migration 8개가 일치하며 dry-run도 최신 상태다. 공개 API의 배터리 수치가 상태바보다 거칠 수 있어 마커에는 퍼센트를 쓰지 않고 작은 배터리 아이콘만 표시한다.
+> **2026-08-13 업데이트**: 두 기능 브랜치를 PR #2, #3으로 `main`에 병합하고 원격과 동기화했다. Device Presence와 수동 QA, 프로필 도시·기본 배송 공항 분리, 홈 도시 시계·날씨·설정, Route Heart 설정, 프로그래밍 가능한 DEBUG 도시 테스트, 준대척 카메라 fallback까지 반영됐다.
 
-도시 중심 프로필 마커, 탭 선택 애니메이션·햅틱, Signal 스티커, 신규 Signal 수신 토스트까지 `8367f0a`에서 완료됐다. 큰 정보 카드와 도시/시간 pill은 시각 검토 후 제거했으므로 복원하지 않는다.
+도시 중심 프로필 마커, 탭 선택 애니메이션·햅틱, Signal 스티커, 신규 Signal 수신 토스트는 `8367f0a`까지 완료됐다. 그 뒤 도시 Route, Device Presence, 프로필 도시·기본 공항 분리, 홈 시계·날씨·설정과 Route Heart를 추가했고, 준대척 도시의 뒷면 Route 표현과 카메라는 `21210a9`, `3c4ffa6`, `0182240`에서 정리했다. 큰 정보 카드와 기존 도시/시간 pill은 복원하지 않는다. 현재 도시 시계·날씨는 홈 좌우의 작은 정보로 구현돼 있다.
 
 Device Presence 수동 QA와 도시 Route 선, 프로필 도시·기본 배송 공항 책임 분리까지 완료했다. 다음 작업은 **소포 작성 시 양쪽 기본 공항을 자동 적용하고 필요할 때만 변경한 뒤 배송 Route 스냅샷으로 저장**하는 것이다.
 
@@ -113,8 +113,9 @@ Device Presence 수동 QA와 도시 Route 선, 프로필 도시·기본 배송 �
 | 프로필 사진 선택·크롭·기본 이미지 | 구현 완료 | 최신 실기기 UI와 카메라 재확인 |
 | 비공개 프로필 사진 Storage/RLS | 원격 적용 완료 | 실제 연결 상대 다운로드 권한 E2E 확인 |
 | 프로필 성공 토스트 | 구현 완료 | 실기기 시각·VoiceOver 확인 |
-| DEBUG 시뮬레이터 계정 | 완료 | 서버 실시간 동기화는 의도적으로 없음 |
-| MapKit 지구본 | 위성 지구본·동적 카메라·도시 프로필 마커·선택 애니메이션·Signal 스티커·마커 배터리·도시 Route 선 완료 | 배송 Route와 Gift annotation 미구현 |
+| DEBUG 시뮬레이터 계정·도시 주입 | 완료 | 설정 즉시 변경·실행 환경변수·자동 캡처 지원, 서버 실시간 동기화는 의도적으로 없음 |
+| 홈 도시 시계·날씨·설정 | 완료 | Open-Meteo 장애·오프라인 시 빈 날씨 처리 유지 |
+| MapKit 지구본 | 위성 지구본·동적 카메라·도시 프로필 마커·Signal·배터리·도시 Route·뒷면 표현·준대척 fallback 완료 | 배송 Route와 Gift annotation 미구현 |
 | Device Presence·배터리 | 완료 | 두 실기기 publish·충전 전환·freshness 화면 QA 완료 |
 | Parcel/Letter/Keepsakes | 로컬 데모 흐름 존재 | 기본 공항 자동 적용·변경·Route 스냅샷·서버 전송 구현 필요 |
 | Polaroid·Voice Tape | 미착수 | Product Plan 후속 단계 |
@@ -144,10 +145,10 @@ Device Presence 수동 QA와 도시 Route 선, 프로필 도시·기본 배송 �
 - 도시 선택 후 주변 공항 POI를 MapKit으로 검색한다.
 - 위치 권한은 `현재 위치로 찾기` 버튼을 누를 때 요청한다.
 - 지구본은 `MKImageryMapConfiguration(elevationStyle: .realistic)`을 사용한다.
-- 팬·핀치·회전·기울기·관성은 MapKit 기본 동작을 유지한다.
+- 팬·핀치·회전·관성은 MapKit 기본 동작을 유지한다. pitch는 지구 실루엣과 Route 끝 투영을 일치시키기 위해 비활성화한다.
 - 카메라 경계는 투영 붕괴 방지를 위해 위도 **±70°**다.
 - 두 사람의 프로필은 공항이 아닌 각 도시의 `latitude/longitude`에 표시한다.
-- 마커는 작은 흰 점, 짧은 선, 46pt 원형 사진으로 구성하며 사진이 없으면 기존 이니셜 fallback을 공유한다.
+- 마커는 46pt 원형 사진을 중심으로 구성하며 사진이 없으면 기존 이니셜 fallback을 공유한다. 사진 아래의 짧은 선과 흰 위치 점은 제거됐다.
 - 사진·이름·Signal 변경은 annotation만 동기화하고 현재 카메라와 사용자 조작 상태는 유지한다.
 - 최초 순서는 `connect → requestInitialFraming → sync(latestMarkers 저장)`이다. layout 후 카메라를 확정하고 `CADisplayLink` 두 프레임 뒤 annotation을 한 번 적용한다.
 - 이 순서를 바꾸거나 카메라 commit 중 annotation을 추가하면 손을 대기 전 마커가 보이지 않고 첫 pan에서 나타나는 현상이 반복됐다. 현재 두 실기기에서 확인된 순서를 가볍게 리팩터링하지 않는다.
@@ -156,9 +157,32 @@ Device Presence 수동 QA와 도시 Route 선, 프로필 도시·기본 배송 �
 - 각 마커는 최신 Signal이 있으면 컬러 유니코드 이모지를 왼쪽 아래에 표시한다. 원 배경 대신 실제 이모지 알파 외곽을 따라 1.5pt 흰 테두리를 만든다.
 - `EmojiStickerRenderer.image(for:pointSize:outlineWidth:)`는 어떤 유니코드 이모지든 기본 15pt로 렌더링하고 결과를 캐시한다. 이모지별 크기 보정은 하지 않는다.
 - 초기 카메라는 수동으로 잡은 좌표나 거리를 하드코딩하지 않는다. 두 도시의 구면 중점, 실제 하단 UI 여백 비율, 최대 축소 상태를 이용해 계산한다.
-- 위도 보정을 적용하되, 준대척 도시 조합에서도 어느 도시도 지구 뒤로 넘어가지 않도록 구면 지평선 여유로 이동량을 제한한다.
+- 피렌체–웰링턴 같은 준대척 도시 조합에서는 MapKit 최대 카메라 거리로 실제 지표 annotation 두 개를 동시에 표시할 수 없다. 실제 도시 좌표와 Route는 변경하지 않고 가려진 쪽만 별도 화면 표현으로 표시한다.
 - 두 도시 중심은 `MKGeodesicPolyline`으로 연결한다. 얇은 반투명 흰색 점선으로 마커 아래에 표시하며 같은 도시에서는 숨긴다.
 - Route overlay는 도시가 달라질 때만 교체한다. 이름·사진·Signal·배터리 갱신은 Route를 다시 만들거나 카메라 framing을 호출하지 않는다.
+- 뒷면 원은 Route의 투영 probe를 이용해 화면에 실제로 렌더된 마지막 점선 끝에 배치한다. 다른 앞면 도시 좌표에 annotation을 옮기는 방식으로 구현하지 않는다.
+- 상태는 `실제 프로필 / 뒷면 원 / 완전 숨김` 세 가지다. 뒷면 원은 실제 프로필보다 조금 작고 옅다. 일반 Route는 지평선 뒤 약 20°를 넘으면 실제 프로필과 뒷면 원을 모두 숨긴다.
+- 드래그·회전·핀치와 관성 중에는 현재 뒷면 원을 0.14초 fade out하고 위치·앞뒤 상태를 갱신하지 않는다. `regionDidChange` 뒤 3 display frame 동안 투영이 안정된 다음 최종 상태와 위치를 한 번 계산하고 0.22초 fade in한다.
+- `mapViewDidChangeVisibleRegion`에서 뒷면 원 위치를 실시간으로 추적하는 코드를 다시 넣지 않는다. 경계 근처에서 앞면 핀과 뒷면 원이 번갈아 선택되며 떨리던 문제를 피하기 위한 결정이다.
+- `routeSampleProbeAnnotations`, `routeSampleVectors`, `presentationOverlayView`는 실제 점선 끝을 찾고 화면 표현을 분리하기 위한 핵심이다. 단순히 annotation 좌표를 보정하는 코드로 대체하지 않는다.
+- `CameraFraming.placement(in:)`의 기존 구면 중점·하단 여백 계산은 기본 경로다. 도시 간 각거리 `> 165°`와 화면상 Route 축 `< 36°`가 동시에 성립할 때만 동거리 적도 fallback 중심을 사용한다.
+- 일반 준대척 fallback은 대권 중점 쪽으로 20° 기울이고 뒷면 허용 범위를 40°로 넓힌다. 각거리 `> 175°`이며 대권 중점 위도 절댓값이 `> 70°`인 극점 특수 케이스만 Route 위로 55° 이동하고 허용 범위를 70°로 둔다.
+- 이 조건 분기는 기존에 잘 보이던 Route의 카메라를 유지하면서 Bogotá–Jakarta, Quito–Kuala Lumpur처럼 극점 인접 중점에서 과도하게 확대되거나 양 끝이 화면 밖으로 밀리던 조합만 보정하기 위한 것이다. 상수를 일반 Route 전체에 적용하지 않는다.
+
+#### 프로필 마커 앵커 변경과 이전 방식 보관
+
+현행 방식은 도시 좌표와 원형 사진의 중심을 일치시킨다. `GlobeProfileAnnotationView`의 캔버스는 68×92pt이고, 46pt 아바타가 `y = 22`에서 시작하므로 아바타 중심은 캔버스 로컬 좌표 `y = 45`다. annotation 캔버스 중심은 `y = 46`이므로 `centerOffset.y`를 `46 - 45 = 1pt`로 적용한다. Route overlay의 실제 끝 좌표는 도시 중심 그대로이며, 프로필 사진이 선 위에 그려져 화면에서는 점선이 원 테두리에서 시작하고 끝나는 것처럼 보인다.
+
+2026-08-13 이전 방식은 도시 좌표를 프로필 아래의 흰 위치 점 중심에 고정했다. 복원이 필요할 때 참고할 값은 다음과 같다.
+
+- 캔버스 68×92pt, 아바타 반지름 23pt, 아바타 시작 `y = 22`
+- 흰 위치 점 6×6pt, 시작 `y = 84`, 중심 `y = 87`
+- `centerOffset.y = 46 - 87 = -41pt`
+- 다리 frame은 `x = 33.5`, `y = 66`, `width = 1`, `height = 18`
+- 다리는 흰색 82% 불투명도와 0.5pt corner radius, 점은 흰색과 검정 그림자(opacity 0.25, radius 2)를 사용
+- 뒷면 표현에서는 `setBacksidePresentation(true)`가 다리와 위치 점을 숨김
+
+이전 방식으로 돌아가려면 `dotSize`, `dotOriginY`, `dotCenterY`, `stemView`, `dotView`와 각각의 초기화·layout 코드를 복원하고 annotation의 `centerOffset`을 흰 점 중심 기준으로 되돌린다. 다만 이 경우 Route Heart는 도시 좌표 간 정중앙에 있어도 프로필 원 중심 사이에서는 한쪽으로 치우쳐 보일 수 있다.
 
 주요 파일:
 
@@ -252,6 +276,8 @@ Supabase 로그인과 온보딩 없이 연결된 화면을 반복 검증하기 �
 - 역할별 UserDefaults가 분리돼 있다.
 - 두 시뮬레이터 사이의 서버/실시간 동기화는 하지 않는다.
 - Release와 실기기에서는 활성화되지 않는다.
+- 설정의 `DEBUG · 도시 테스트`에서 두 도시를 MapKit으로 골라 즉시 홈에 반영할 수 있다.
+- 자동 실험에서는 `WTY_DEBUG_MY_CITY_JSON`, `WTY_DEBUG_PARTNER_CITY_JSON`으로 이름·국가·좌표·IANA 시간대를 주입한다.
 
 실행 예:
 
@@ -271,6 +297,18 @@ xcrun simctl launch --terminate-running-process booted \
 
 `previewSheet`는 `compose`, `signal`, `keepsakes`, `us`, `letter`를 지원한다. 자세한 내용은 `docs/debug-simulator.md`에 있다.
 
+첫 홈 자동 캡처 예:
+
+```bash
+./scripts/capture-debug-home.sh \
+  C5919541-6BEA-4A25-92C7-939A469F18F7 \
+  '{"name":"Bogotá","country":"Colombia","latitude":4.711,"longitude":-74.0721,"timeZoneID":"America/Bogota"}' \
+  '{"name":"Jakarta","country":"Indonesia","latitude":-6.2088,"longitude":106.8456,"timeZoneID":"Asia/Jakarta"}' \
+  artifacts/debug-city-tests/png/manual--bogota-jakarta.png
+```
+
+카메라 실험 PNG 50장은 `artifacts/debug-city-tests/png/` 한 폴더에 `단계--도시쌍.png` 이름으로 정리돼 있다. 최종 검증은 문제 조합 8개(`final-camera--problem--*`)와 기존 정상 조합 5개(`final-camera--regression--*`)다.
+
 ## 8. 검증 환경과 명령
 
 - 프로젝트: `WayToYou.xcodeproj`
@@ -283,7 +321,7 @@ xcrun simctl launch --terminate-running-process booted \
 - 실기기 UUID: `06D7A8DA-E136-59E0-84EA-33DB46085EEE`
 - 추가 실기기: `NXQOEKRJFJCMXM4`, iPhone 14 (`iPhone14,7`)
 - iPhone 14 UUID: `D30BD3D7-C016-5256-A4BD-95F2BA16C751`
-- 작업 완료 검증 기준은 계속 `승우의 iPhone`이다. `8367f0a`의 마커·Signal 변경은 iPhone 14에도 반복 설치·실행했다.
+- 작업 완료 검증 기준은 계속 `승우의 iPhone`이다. 마커·Signal 변경과 뒷면 마커 fade 정책은 iPhone 14에도 반복 설치·실행했다.
 
 문서 작성 시점에 다음 Debug 시뮬레이터 빌드는 성공했다.
 
@@ -299,7 +337,13 @@ xcodebuild \
 
 도시 프로필 마커 구현은 iPhone 17 시뮬레이터를 완전히 재실행한 뒤 화면을 건드리지 않은 상태에서 두 마커가 즉시 보이는 것까지 확인했다. 흰 외곽선 유니코드 이모지 스티커도 시뮬레이터 화면에서 확인했다. `승우의 iPhone`과 `NXQOEKRJFJCMXM4` iPhone 14에는 `8367f0a`를 빌드·설치·실행했다. 단, 양방향 Signal 만료와 수신 토스트를 통제된 절차로 재검증한 것은 아니므로 E2E 완료로 적지 않는다.
 
-도시 Route 점선은 iPhone 17 시뮬레이터의 `mina` fixture에서 서울–파리 마커의 흰 점을 정확히 연결하고, 앱을 건드리기 전 선과 두 마커가 함께 나타나는 것을 확인했다. 이후 같은 변경분을 `승우의 iPhone`에 빌드·설치·실행했다.
+도시 Route 점선의 최초 구현 당시에는 iPhone 17 시뮬레이터의 `mina` fixture에서 서울–파리 마커의 흰 점을 정확히 연결하고, 앱을 건드리기 전 선과 두 마커가 함께 나타나는 것을 확인했다. 이후 같은 변경분을 `승우의 iPhone`에 빌드·설치·실행했다. 이 선·점 앵커는 위의 이전 방식 기록에 보관했다.
+
+준대척 도시 처리는 피렌체–웰링턴 조합을 기준으로 검증했다. 가려진 프로필은 실제 도시 annotation을 이동하지 않고 보이는 Route 점선 끝의 화면 overlay로 나타난다. 경계에서는 드래그 시작과 함께 뒷면 원이 fade out되고, 관성과 MapKit 투영이 끝난 뒤 최종 위치에서 fade in한다. 최신 변경분은 `승우의 iPhone`과 `NXQOEKRJFJCMXM4` iPhone 14에 빌드·설치·실행했다.
+
+`0182240`의 카메라 fallback은 코드로 주입한 준대척 문제 조합 8개와 기존 정상 조합 5개의 첫 홈 화면을 iPhone 17 시뮬레이터에서 캡처해 비교했다. 최종 Debug 시뮬레이터 검증 뒤 Release 구성으로 빌드하고 `승우의 iPhone`에 설치·실행했다. 당시 문서와 캡처 파일만 정리한 작업에서는 iOS 소스를 바꾸지 않아 추가 기기 실행을 하지 않았다.
+
+2026-08-13에는 프로필 아래 다리와 흰 위치 점을 제거하고 도시 좌표를 프로필 원 중심에 맞췄다. iPhone 17 시뮬레이터와 실기기용 빌드에 성공했고, 최종 앱을 `승우의 iPhone`에 설치·실행했다.
 
 프로필 도시·기본 배송 공항 분리는 iPhone 17 시뮬레이터의 `우리` 화면에서 `서울 ↔ Paris` 도시와 `ICN ↔ CDG` 기본 배송값이 분리되어 보이는 것을 확인했다. 같은 변경분을 `승우의 iPhone`과 iPhone 14에 빌드·설치·실행했고 두 기기에서 앱 프로세스가 유지되는 것도 확인했다.
 
@@ -314,7 +358,7 @@ iOS 코드를 수정한 작업은 모두 끝낸 뒤 AGENTS 지침에 따라 `승
 
 ## 9. Git 이력 요약
 
-현재 작업 브랜치의 주요 커밋은 아래 순서로 쌓였다.
+현재 `main`에 반영된 주요 커밋은 아래 순서로 쌓였다.
 
 | 커밋 | 내용 |
 | --- | --- |
@@ -344,6 +388,19 @@ iOS 코드를 수정한 작업은 모두 끝낸 뒤 AGENTS 지침에 따라 `승
 | `ba6b9b6` | 도시 중심 프로필 마커와 동적 카메라 구현 |
 | `c35972f` | 프로필 마커 선택 애니메이션·햅틱 구현 |
 | `8367f0a` | 마커 초기 노출 안정화, Signal 토스트와 이모지 스티커 구현 |
+| `79d6431` | 연결 상대 전용 Device Presence와 배터리 구현 |
+| `1d9defc` | 두 도시 중심을 잇는 대권 Route 선 구현 |
+| `8adffb3` | 프로필 도시와 기본 배송 공항 책임 분리 |
+| `75afc5e` | 공항 변경 안내 문구 단순화 |
+| `67b9841` | 홈 도시 시계·날씨와 설정 구현 |
+| `3649818` | 홈 크롬과 배터리 아이콘 정리 |
+| `c763ace` | Route Heart 표시·애니메이션·이모지 설정 구현 |
+| `21210a9` | 지구 뒷면 Route 마커 구현 |
+| `3c4ffa6` | 뒷면 마커 상태와 드래그 전환 안정화 |
+| `6213463` | 설정·실행 환경변수·스크립트 기반 DEBUG 도시 테스트 구현 |
+| `0182240` | 기존 카메라를 보존하는 준대척 Route fallback 구현 |
+| `4ce6fdf` | PR #2 `codex/globe-visual-connections`를 `main`에 병합 |
+| `2c2fd0c` | PR #3 `codex/product-plan-mvp`를 `main`에 병합 |
 
 중간 크롭 실험 커밋(`95b9607`, `fe5becf`, `f28826b`, `76aa126`)은 최종 형태로 가는 과정이다. 현재 HEAD의 코드를 기준으로 판단한다.
 
@@ -365,7 +422,7 @@ iOS 코드를 수정한 작업은 모두 끝낸 뒤 AGENTS 지침에 따라 `승
 ```bash
 cd /Users/seungwoo/Desktop/WayToYou
 git status --short --branch
-git log --oneline -12
+git log --oneline -15
 sed -n '1,240p' docs/next-session-handoff.md
 ```
 
@@ -380,6 +437,8 @@ sed -n '1,240p' docs/next-session-handoff.md
 - 공항에 사람 프로필을 두지 않는다.
 - 시뮬레이터 검증은 `mina`부터 시작한다.
 - 마커 초기 등록의 `CADisplayLink` 두 프레임 지연을 이유 없이 제거하지 않는다.
+- 뒷면 마커의 종료 후 3 display frame 안정화와 fade 전환을 실시간 추적으로 되돌리지 않는다.
+- 준대척 fallback의 `> 165°`, Route 축 `< 36°` 조건을 제거해 일반 Route 카메라까지 바꾸지 않는다.
 - 이름·사진·Signal·배터리 갱신 경로에서 카메라 framing을 호출하지 않는다.
 - iOS 수정 완료 후 반드시 `승우의 iPhone`에서 실행한다.
 - 성공한 범위만 커밋하고 다음 기능과 섞지 않는다.
