@@ -358,10 +358,13 @@ struct ContentView: View {
             selectedSignal: store.latestSignal(.outgoing, at: now)?.signal,
             partnerName: store.partnerProfile?.displayName ?? "상대",
             partnerCityName: store.partnerCity.name,
-            partnerTimeZone: store.partnerCity.timeZone,
-            myTimeZone: store.homeCity.timeZone,
+            partnerClock: SignalPickerSheet.clock(in: store.partnerCity.timeZone, at: now),
+            timeOffset: SignalPickerSheet.offset(
+                from: store.homeCity.timeZone,
+                to: store.partnerCity.timeZone,
+                at: now
+            ),
             distanceKilometers: store.distanceKilometers,
-            now: now,
             onSelect: { signal in
                 route = .none
                 UIImpactFeedbackGenerator(style: .soft).impactOccurred()

@@ -16,10 +16,11 @@ struct SignalPickerSheet: View {
     let selectedSignal: CoupleSignal?
     let partnerName: String
     let partnerCityName: String
-    let partnerTimeZone: TimeZone
-    let myTimeZone: TimeZone
+    /// 초마다 바뀌는 `Date`를 그대로 받으면, 여는 프레임에 값이 달라져 있을 때
+    /// 하필 그 순간 텍스처를 다시 굽는다. 이미 만들어진 문자열만 받는다.
+    let partnerClock: String
+    let timeOffset: String
     let distanceKilometers: Int
-    let now: Date
     let onSelect: (CoupleSignal) -> Void
     let onEditKey: (Int, SignalKey) -> Void
     let onDismiss: () -> Void
@@ -129,16 +130,17 @@ struct SignalPickerSheet: View {
         String(max(0, distanceKilometers))
     }
 
-    private var partnerClock: String {
+    /// 창에 띄울 상대 도시의 현재 시각.
+    static func clock(in timeZone: TimeZone, at date: Date) -> String {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = partnerTimeZone
-        let parts = calendar.dateComponents([.hour, .minute], from: now)
+        calendar.timeZone = timeZone
+        let parts = calendar.dateComponents([.hour, .minute], from: date)
         return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
     }
 
     /// 상대가 나보다 몇 시간 앞인지. 30분 시차가 있는 도시가 있어 분도 함께 본다.
-    private var timeOffset: String {
-        let delta = partnerTimeZone.secondsFromGMT(for: now) - myTimeZone.secondsFromGMT(for: now)
+    static func offset(from mine: TimeZone, to theirs: TimeZone, at date: Date) -> String {
+        let delta = theirs.secondsFromGMT(for: date) - mine.secondsFromGMT(for: date)
         if delta == 0 { return "SAME HOUR" }
         let sign = delta > 0 ? "+" : "-"
         let minutes = abs(delta) / 60
