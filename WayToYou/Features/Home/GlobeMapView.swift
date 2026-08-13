@@ -123,6 +123,12 @@ struct GlobeMapView: UIViewRepresentable {
             RouteHeartAnnotationView.self,
             forAnnotationViewWithReuseIdentifier: RouteHeartAnnotationView.reuseIdentifier
         )
+        // 투영 probe는 최대 257개가 지평선을 넘나든다. 재사용 큐 없이는
+        // 화면에 들어올 때마다 MKAnnotationView를 새로 할당하게 된다.
+        mapView.register(
+            GlobeProjectionProbeView.self,
+            forAnnotationViewWithReuseIdentifier: GlobeProjectionProbeView.reuseIdentifier
+        )
 
         context.coordinator.connect(to: mapView)
         context.coordinator.requestInitialFraming(cameraFraming)
@@ -669,6 +675,9 @@ struct GlobeMapView: UIViewRepresentable {
         private var nativeFadeInMarkerIDs: Set<GlobeProfileMarker.ID> = []
         private var routeSampleProbeAnnotations: [GlobeProjectionProbeAnnotation] = []
         private var routeSampleVectors: [SphereVector] = []
+        /// probe 좌표를 옮긴 직후 MapKit이 아직 다시 투영하지 않은 상태.
+        private var routeSampleProjectionIsStale = false
+        private var markerRepresentationRefreshScheduled = false
 
         private enum MarkerRepresentation {
             case native
@@ -730,6 +739,8 @@ struct GlobeMapView: UIViewRepresentable {
             nativeFadeInMarkerIDs.removeAll()
             routeSampleProbeAnnotations.removeAll()
             routeSampleVectors.removeAll()
+            routeSampleProjectionIsStale = false
+            markerRepresentationRefreshScheduled = false
             mapView = nil
         }
 
@@ -760,21 +771,17 @@ struct GlobeMapView: UIViewRepresentable {
             let routeChanged = appliedRoute != latestRoute
 
             if routeChanged {
-                if !routeSampleProbeAnnotations.isEmpty {
-                    mapView.removeAnnotations(routeSampleProbeAnnotations)
-                    routeSampleProbeAnnotations.removeAll(keepingCapacity: true)
-                }
                 if let routeOverlay {
                     mapView.removeOverlay(routeOverlay)
                     self.routeOverlay = nil
                 }
-                routeSampleVectors.removeAll(keepingCapacity: true)
                 if let routeHeartAnnotation {
                     mapView.removeAnnotation(routeHeartAnnotation)
                     self.routeHeartAnnotation = nil
                 }
                 appliedRoute = latestRoute
 
+                var sampleCoordinates: [CLLocationCoordinate2D] = []
                 if let latestRoute, latestRoute.hasVisibleSpan {
                     var coordinates = [
                         CLLocationCoordinate2D(
@@ -796,30 +803,70 @@ struct GlobeMapView: UIViewRepresentable {
                     let sampleCount = 256
                     let points = overlay.points()
                     var sampledIndices: Set<Int> = []
+                    sampleCoordinates.reserveCapacity(sampleCount + 1)
                     for sample in 0...sampleCount {
                         let index = Int(
                             (Double(overlay.pointCount - 1)
                                 * Double(sample) / Double(sampleCount)).rounded()
                         )
                         guard sampledIndices.insert(index).inserted else { continue }
-                        let coordinate = points[index].coordinate
-                        routeSampleProbeAnnotations.append(
-                            GlobeProjectionProbeAnnotation(
-                                coordinate: coordinate
-                            )
-                        )
-                        routeSampleVectors.append(
-                            SphereVector(
-                                latitude: coordinate.latitude,
-                                longitude: coordinate.longitude
-                            )
-                        )
+                        sampleCoordinates.append(points[index].coordinate)
                     }
-                    mapView.addAnnotations(routeSampleProbeAnnotations)
                 }
+                applyRouteSampleCoordinates(sampleCoordinates, in: mapView)
             }
 
             syncRouteHeart(in: mapView)
+        }
+
+        /// Route가 바뀔 때마다 probe 257개를 통째로 버리고 다시 만들 필요는 없다.
+        /// 겹치는 만큼은 좌표만 옮기면 MapKit이 기존 annotation view를 그대로 다시
+        /// 투영하므로, 도시 변경 한 번에 드는 view 생성이 대부분 사라진다.
+        private func applyRouteSampleCoordinates(
+            _ coordinates: [CLLocationCoordinate2D],
+            in mapView: MKMapView
+        ) {
+            let movedCount = min(routeSampleProbeAnnotations.count, coordinates.count)
+            for index in 0..<movedCount {
+                routeSampleProbeAnnotations[index].coordinate = coordinates[index]
+            }
+
+            if routeSampleProbeAnnotations.count > coordinates.count {
+                let surplus = Array(routeSampleProbeAnnotations[coordinates.count...])
+                mapView.removeAnnotations(surplus)
+                routeSampleProbeAnnotations.removeLast(surplus.count)
+            } else if coordinates.count > routeSampleProbeAnnotations.count {
+                let added = coordinates[routeSampleProbeAnnotations.count...].map {
+                    GlobeProjectionProbeAnnotation(coordinate: $0)
+                }
+                routeSampleProbeAnnotations.append(contentsOf: added)
+                mapView.addAnnotations(added)
+            }
+
+            routeSampleVectors = coordinates.map {
+                SphereVector(latitude: $0.latitude, longitude: $0.longitude)
+            }
+
+            // 옮긴 probe의 view는 이번 runloop 안에서는 아직 이전 좌표에 있다.
+            // 새로 만들었을 때 화면 좌표가 없는 것과 같은 상태로 취급해, 한 프레임
+            // 뒤 실제 투영을 다시 읽을 때까지 뒷면 판정을 미룬다.
+            guard movedCount > 0 else { return }
+            routeSampleProjectionIsStale = true
+            scheduleMarkerRepresentationRefresh()
+        }
+
+        /// probe가 새로 붙거나 옮겨진 직후에는 MapKit이 아직 투영하지 않았다.
+        /// 여러 번 요청이 겹쳐도 다음 runloop에 한 번만 다시 읽는다.
+        private func scheduleMarkerRepresentationRefresh() {
+            guard !markerRepresentationRefreshScheduled else { return }
+            markerRepresentationRefreshScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.markerRepresentationRefreshScheduled = false
+                self.routeSampleProjectionIsStale = false
+                guard let mapView = self.mapView else { return }
+                self.updateMarkerRepresentations(in: mapView)
+            }
         }
 
         private func syncRouteHeart(in mapView: MKMapView) {
@@ -1184,13 +1231,17 @@ struct GlobeMapView: UIViewRepresentable {
         ) -> RouteEndpointPresentation? {
             guard routeSampleProbeAnnotations.count > 1,
                   routeSampleVectors.count == routeSampleProbeAnnotations.count,
+                  !routeSampleProjectionIsStale,
                   let endpointIndex = latestMarkers.firstIndex(where: { $0.id == id }) else {
                 return nil
             }
             let searchesFromStart = endpointIndex == 0
+            // 매 프레임 마커마다 불리는 경로다. 257칸 배열을 새로 만들지 않도록
+            // 양방향 모두 같은 타입의 지연 순회로 훑는다.
+            let sampleIndices = routeSampleProbeAnnotations.indices
             let indices = searchesFromStart
-                ? Array(routeSampleProbeAnnotations.indices)
-                : Array(routeSampleProbeAnnotations.indices.reversed())
+                ? stride(from: sampleIndices.lowerBound, to: sampleIndices.upperBound, by: 1)
+                : stride(from: sampleIndices.upperBound - 1, to: sampleIndices.lowerBound - 1, by: -1)
             let visibleBounds = mapView.bounds.insetBy(dx: -8, dy: -8)
             let cameraCenter = SphereVector(
                 latitude: mapView.camera.centerCoordinate.latitude,
@@ -1794,7 +1845,12 @@ struct GlobeMapView: UIViewRepresentable {
             nearbyFramingFramesRemaining = 0
         }
 
+        /// 지도의 pan·pinch·rotate 인식기는 MapKit 자신의 뷰에만 달린다. annotation
+        /// view 아래로는 내려가지 않아 probe 257개의 서브트리를 매번 재귀하지
+        /// 않는다. 인식기를 캐시하지는 않는다. MapKit이 내부 뷰를 늦게 만들면
+        /// 굳어 버린 목록이 사용자의 제스처를 놓쳐 하강이 안 멈추게 된다.
         private func hasActiveMapGesture(in view: UIView) -> Bool {
+            guard !(view is MKAnnotationView) else { return false }
             if view.gestureRecognizers?.contains(where: {
                 $0.state == .began || $0.state == .changed
             }) == true {
@@ -1808,9 +1864,9 @@ struct GlobeMapView: UIViewRepresentable {
             viewFor annotation: any MKAnnotation
         ) -> MKAnnotationView? {
             if annotation is GlobeProjectionProbeAnnotation {
-                return GlobeProjectionProbeView(
-                    annotation: annotation,
-                    reuseIdentifier: nil
+                return mapView.dequeueReusableAnnotationView(
+                    withIdentifier: GlobeProjectionProbeView.reuseIdentifier,
+                    for: annotation
                 )
             }
             if annotation is RouteHeartAnnotation {
@@ -2071,12 +2127,10 @@ struct GlobeMapView: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, didAdd views: [MKAnnotationView]) {
             guard views.contains(where: {
                 $0 is GlobeProfileAnnotationView || $0 is GlobeProjectionProbeView
-            }),
-                  let mapView = mapView as? NativeGlobeMapView else { return }
-            DispatchQueue.main.async { [weak self, weak mapView] in
-                guard let self, let mapView else { return }
-                self.updateMarkerRepresentations(in: mapView)
-            }
+            }) else { return }
+            // probe는 한 번에 수십 개씩 여러 배치로 들어온다. 배치마다
+            // 다시 읽지 않고 다음 runloop에 한 번만 정리한다.
+            scheduleMarkerRepresentationRefresh()
         }
 
     }
@@ -2216,8 +2270,26 @@ private final class GlobeProjectionProbeAnnotation: NSObject, MKAnnotation {
 }
 
 private final class GlobeProjectionProbeView: MKAnnotationView {
+    static let reuseIdentifier = "GlobeProjectionProbeView"
+
     override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        applyProbeConfiguration()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        // 재사용 큐가 alpha와 transform을 되돌려 놓을 수 있다. probe는 보이면
+        // 안 되고 collision으로 밀려나도 안 되므로 매번 설정을 다시 건다.
+        applyProbeConfiguration()
+    }
+
+    private func applyProbeConfiguration() {
         bounds = CGRect(x: 0, y: 0, width: 1, height: 1)
         backgroundColor = .clear
         isOpaque = false
@@ -2225,11 +2297,6 @@ private final class GlobeProjectionProbeView: MKAnnotationView {
         isEnabled = false
         displayPriority = .required
         collisionMode = .none
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
     }
 }
 
