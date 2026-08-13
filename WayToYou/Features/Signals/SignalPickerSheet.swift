@@ -19,42 +19,26 @@ struct SignalPickerSheet: View {
     let now: Date
     let onSelect: (CoupleSignal) -> Void
     let onEditKey: (Int, SignalKey) -> Void
+    let onDismiss: () -> Void
 
     @State private var isEditingKeys = false
     @State private var editingIndex: Int?
     @State private var draftEmoji = ""
     @State private var draftLabel = ""
+    @State private var dragOffset: CGFloat = 0
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
+        ZStack(alignment: .bottom) {
+            // 기계 밖을 누르면 내려간다. 지구를 가리지 않게 아주 옅게만 덮는다.
+            Color.black.opacity(0.28)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onDismiss)
 
-            VStack(spacing: Keypad.chassisGap) {
-                Nameplate(isEditing: isEditingKeys, onToggleEditing: toggleEditing)
-
-                DisplayPanel(
-                    value: distanceDigits,
-                    unit: "KM",
-                    topLeft: isEditingKeys ? "EDIT" : partnerName,
-                    topRight: isEditingKeys ? "TAP KEY" : partnerCityName,
-                    bottomLeft: isEditingKeys ? "EMOJI" : timeOffset,
-                    bottomRight: isEditingKeys ? "+ LABEL" : partnerClock
-                )
-
-                KeyWell(
-                    keys: keys,
-                    selectedSignal: selectedSignal,
-                    isEditing: isEditingKeys,
-                    onSelect: onSelect,
-                    onEdit: beginEditing
-                )
-            }
-            .padding(Keypad.chassisPadding)
-            .background(ChassisSurface())
-            .padding(.horizontal, Metric.screenPadding)
-            .padding(.vertical, Metric.l)
+            machine
+                .offset(y: dragOffset)
+                .gesture(dismissDrag)
         }
-        .presentationBackground(Palette.space)
         .alert("키캡 바꾸기", isPresented: isPresentingEditor) {
             TextField("이모지", text: $draftEmoji)
             TextField("설명 \(SignalKey.labelLimit)자 이내", text: $draftLabel)
@@ -63,6 +47,50 @@ struct SignalPickerSheet: View {
         } message: {
             Text("설명은 기계에 새기지 않고 나중에 알림에만 써요")
         }
+    }
+
+    private var machine: some View {
+        VStack(spacing: Keypad.chassisGap) {
+            Nameplate(isEditing: isEditingKeys, onToggleEditing: toggleEditing)
+
+            DisplayPanel(
+                value: distanceDigits,
+                unit: "KM",
+                topLeft: isEditingKeys ? "EDIT" : partnerName,
+                topRight: isEditingKeys ? "TAP KEY" : partnerCityName,
+                bottomLeft: isEditingKeys ? "EMOJI" : timeOffset,
+                bottomRight: isEditingKeys ? "+ LABEL" : partnerClock
+            )
+
+            KeyWell(
+                keys: keys,
+                selectedSignal: selectedSignal,
+                isEditing: isEditingKeys,
+                onSelect: onSelect,
+                onEdit: beginEditing
+            )
+        }
+        .padding(Keypad.chassisPadding)
+        .background(ChassisSurface())
+        .frame(maxWidth: Keypad.chassisMaxWidth)
+        .padding(.horizontal, Metric.screenPadding)
+        .padding(.bottom, Keypad.chassisThickness + Metric.m)
+    }
+
+    /// 시트처럼 아래로 끌어 내려 닫는다. 판이 없어도 손에 익은 동작은 남긴다.
+    private var dismissDrag: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                dragOffset = max(0, value.translation.height)
+            }
+            .onEnded { value in
+                if value.translation.height > 90 || value.predictedEndTranslation.height > 220 {
+                    onDismiss()
+                }
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                    dragOffset = 0
+                }
+            }
     }
 
     private var isPresentingEditor: Binding<Bool> {
@@ -122,21 +150,38 @@ struct SignalPickerSheet: View {
 
 /// 아이보리 플라스틱 몸통. 위에서 오는 빛 하나를 기준으로 위가 밝고 아래가 어둡다.
 private struct ChassisSurface: View {
-    private let shape = RoundedRectangle(cornerRadius: Keypad.chassisRadius, style: .continuous)
+    private let outer = RoundedRectangle(cornerRadius: Keypad.chassisRadius, style: .continuous)
+    private let inner = RoundedRectangle(
+        cornerRadius: Keypad.chassisRadius - Keypad.chassisRim,
+        style: .continuous
+    )
 
     var body: some View {
         ZStack {
-            // 몸통 두께. 아래로 삐져나온 옆면이 있어야 판때기가 아니라 상자로 보인다.
-            shape
+            // 아래로 삐져나온 옆면. 판때기가 아니라 상자로 보이게 하는 두께다.
+            outer
                 .fill(Keypad.chassisSideFill)
                 .offset(y: Keypad.chassisThickness)
-                .shadow(color: .black.opacity(0.7), radius: 26, y: 16)
+                .shadow(color: .black.opacity(0.72), radius: 28, y: 18)
 
-            shape
+            // 사방을 두르는 테두리. 빛을 정면으로 받아 가장 밝다.
+            outer
+                .fill(Keypad.chassisRimFill)
+                .overlay { outer.strokeBorder(Keypad.rimEdge, lineWidth: 1.4) }
+                .overlay { PlasticGrain().clipShape(outer) }
+                .shadow(color: .black.opacity(0.4), radius: 7, y: 4)
+
+            // 테두리 안으로 한 단 내려앉은 윗판.
+            inner
                 .fill(Keypad.chassisFill)
-                .overlay { shape.strokeBorder(Keypad.topLightEdge, lineWidth: 1.2) }
-                .overlay { PlasticGrain().clipShape(shape) }
-                .shadow(color: .black.opacity(0.35), radius: 6, y: 3)
+                .innerShadow(
+                    radius: Keypad.chassisRadius - Keypad.chassisRim,
+                    color: .black.opacity(0.28),
+                    width: 4
+                )
+                .overlay { inner.strokeBorder(Keypad.recessEdge, lineWidth: 1) }
+                .overlay { PlasticGrain().clipShape(inner) }
+                .padding(Keypad.chassisRim)
         }
     }
 }
@@ -586,8 +631,12 @@ private extension View {
 }
 
 private enum Keypad {
-    static let chassisRadius: CGFloat = 26
-    static let chassisPadding: CGFloat = 14
+    static let chassisRadius: CGFloat = 28
+    /// 손에 잡히는 기계로 보이려면 화면 폭을 다 먹으면 안 된다.
+    static let chassisMaxWidth: CGFloat = 330
+    static let chassisRim: CGFloat = 7
+    /// 테두리가 배경 안쪽으로 들어오므로 내용은 테두리 두께만큼 더 물러난다.
+    static let chassisPadding: CGFloat = 18
     static let chassisGap: CGFloat = 13
     static let glassRadius: CGFloat = 12
     static let wellRadius: CGFloat = 16
@@ -609,8 +658,26 @@ private enum Keypad {
     static let engraved = Color(red: 0.38, green: 0.37, blue: 0.35)
     static let engravedFaint = Color(red: 0.55, green: 0.54, blue: 0.52)
 
+    /// 테두리는 빛을 정면으로 받는 면이라 가장 밝고, 왼쪽 위에서 오른쪽 아래로 어두워진다.
+    static let chassisRimFill = LinearGradient(
+        colors: [
+            Color(red: 0.975, green: 0.968, blue: 0.948),
+            Color(red: 0.900, green: 0.890, blue: 0.866),
+            Color(red: 0.790, green: 0.778, blue: 0.752)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+
+    static let rimEdge = LinearGradient(
+        colors: [.white.opacity(0.95), .white.opacity(0.2), .black.opacity(0.28)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+
+    /// 테두리 안쪽 윗판은 한 단 내려앉아 있어 조금 어둡다.
     static let chassisFill = LinearGradient(
-        colors: [Color(red: 0.945, green: 0.935, blue: 0.910), Color(red: 0.820, green: 0.808, blue: 0.780)],
+        colors: [Color(red: 0.880, green: 0.870, blue: 0.846), Color(red: 0.815, green: 0.803, blue: 0.776)],
         startPoint: .top,
         endPoint: .bottom
     )

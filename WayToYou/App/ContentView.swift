@@ -94,7 +94,14 @@ struct ContentView: View {
                     signalToast = nil
                 }
             }
-            .sheet(item: $route.presented) { destination in
+            // Signal 기계는 시트가 아니라 오버레이다. iOS 26 시트는 배경 유리를 강제로
+            // 그려서 기계 옆에 판이 남는데, 이건 기계만 화면 밑에서 올라와야 한다.
+            .overlay(alignment: .bottom) {
+                signalMachine
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            .animation(.spring(response: 0.46, dampingFraction: 0.88), value: route.presented == .signal)
+            .sheet(item: $route.sheetPresented) { destination in
                 sheet(for: destination)
             }
             .alert("Heart를 보내지 못했어요", isPresented: heartMessageBinding) {
@@ -323,10 +330,10 @@ struct ContentView: View {
 
     // MARK: - Sheets
 
+    /// 시트가 아니라 오버레이로 올라오는 Signal 기계.
     @ViewBuilder
-    private func sheet(for destination: SheetRoute.Destination) -> some View {
-        switch destination {
-        case .signal:
+    private var signalMachine: some View {
+        if route.presented == .signal {
             SignalPickerSheet(
                 keys: store.signalKeys,
                 selectedSignal: store.latestSignal(.outgoing, at: now)?.signal,
@@ -343,10 +350,17 @@ struct ContentView: View {
                 },
                 onEditKey: { index, key in
                     store.setSignalKey(key, at: index)
-                }
+                },
+                onDismiss: { route = .none }
             )
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
+        }
+    }
+
+    @ViewBuilder
+    private func sheet(for destination: SheetRoute.Destination) -> some View {
+        switch destination {
+        case .signal:
+            EmptyView()
 
         case .compose:
             ParcelComposerSheet(
@@ -792,6 +806,12 @@ struct SheetRoute {
     }
 
     var presented: Destination?
+
+    /// Signal은 시트가 아니라 오버레이로 올라오므로 시트 경로에서 빼 둔다.
+    var sheetPresented: Destination? {
+        get { presented == .signal ? nil : presented }
+        set { presented = newValue }
+    }
 
     static let none = SheetRoute(presented: nil)
     static let signal = SheetRoute(presented: .signal)
