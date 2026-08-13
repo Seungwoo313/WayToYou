@@ -162,14 +162,14 @@ private struct ChassisSurface: View {
             outer
                 .fill(Keypad.chassisSideFill)
                 .offset(y: Keypad.chassisThickness)
-                // 번지는 범위가 `rasterMargin`을 넘으면 텍스처로 굳힐 때 그림자가 잘린다.
-                .shadow(color: .black.opacity(0.7), radius: 20, y: 12)
+                .shadow(color: .black.opacity(0.72), radius: 28, y: 18)
 
             // 사방을 두르는 테두리. 빛을 정면으로 받아 가장 밝다.
             outer
                 .fill(Keypad.chassisRimFill)
                 .overlay { outer.strokeBorder(Keypad.rimEdge, lineWidth: 1.4) }
                 .overlay { PlasticGrain().clipShape(outer) }
+                .shadow(color: .black.opacity(0.4), radius: 7, y: 4)
 
             // 테두리 안으로 한 단 내려앉은 윗판.
             inner
@@ -180,6 +180,7 @@ private struct ChassisSurface: View {
                     width: 4
                 )
                 .overlay { inner.strokeBorder(Keypad.recessEdge, lineWidth: 1) }
+                .overlay { PlasticGrain().clipShape(inner) }
                 .padding(Keypad.chassisRim)
         }
     }
@@ -305,6 +306,7 @@ private struct LabelStrip: View {
             .font(.system(size: 11, weight: .bold, design: .monospaced))
             .tracking(1.4)
             .foregroundStyle(Keypad.led)
+            .shadow(color: Keypad.led.opacity(0.55), radius: 4)
             .lineLimit(1)
     }
 }
@@ -324,8 +326,6 @@ private struct SevenSegmentReadout: View {
                 }
             }
         }
-        // 글자마다 번짐을 두면 blur가 자릿수만큼 늘어난다. 줄 전체에 한 번만 건다.
-        .shadow(color: Keypad.led.opacity(0.5), radius: 7)
     }
 }
 
@@ -335,6 +335,7 @@ private struct SevenSegmentDigit: View {
 
     var body: some View {
         segments(onlyLit: false)
+            .overlay { glow }
     }
 
     private func segments(onlyLit: Bool) -> some View {
@@ -351,6 +352,13 @@ private struct SevenSegmentDigit: View {
         }
     }
 
+    private var glow: some View {
+        segments(onlyLit: true)
+            .blur(radius: 4)
+            .opacity(0.55)
+            .blendMode(.plusLighter)
+            .allowsHitTesting(false)
+    }
 }
 
 private struct Colon: View {
@@ -364,6 +372,7 @@ private struct Colon: View {
             .frame(width: proxy.size.width, height: proxy.size.height)
             .padding(.vertical, proxy.size.height * 0.18)
         }
+        .shadow(color: Keypad.led.opacity(0.6), radius: 4)
     }
 }
 
@@ -508,9 +517,9 @@ private struct KeycapFace: View {
     var body: some View {
         ZStack(alignment: .top) {
             // 키캡 옆면. 빛이 왼쪽 위에서 오니까 왼쪽 벽이 밝고 오른쪽 아래가 어둡다.
-            // 아홉 개가 각자 그림자를 태우면 A15에서 프레임이 떨어져 옆면 그라데이션으로만 세운다.
             RoundedRectangle(cornerRadius: Keypad.keyRadius, style: .continuous)
                 .fill(Keypad.skirtFill)
+                .shadow(color: .black.opacity(0.55), radius: 4, y: 3)
 
             cap
                 .padding(.horizontal, Keypad.keyInset)
@@ -528,8 +537,13 @@ private struct KeycapFace: View {
             .overlay { dish }
             .overlay(alignment: .top) { specular }
             .overlay { shape.strokeBorder(Keypad.capEdge, lineWidth: 1.2) }
-            .overlay { Text(emoji).font(.system(size: Keypad.emojiSize)) }
+            .overlay {
+                Text(emoji)
+                    .font(.system(size: Keypad.emojiSize))
+                    .shadow(color: .black.opacity(0.45), radius: 2, y: 1.5)
+            }
             .overlay(alignment: .topTrailing) { activeLamp }
+            .overlay { PlasticGrain().clipShape(shape) }
     }
 
     /// 손가락이 닿는 면은 살짝 파여 있다.
@@ -600,7 +614,7 @@ private struct PlasticGrain: View {
                 seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
                 return CGFloat((seed >> 33) % 1_000) / 1_000
             }
-            let count = Int(size.width * size.height / 26)
+            let count = Int(size.width * size.height / 14)
             for _ in 0..<count {
                 let point = CGPoint(x: next() * size.width, y: next() * size.height)
                 let bright = next() > 0.5
@@ -610,7 +624,8 @@ private struct PlasticGrain: View {
                 )
             }
         }
-        // 기계 전체가 이미 텍스처로 굳으므로 여기서 또 굳히면 offscreen pass만 하나 늘어난다.
+        // 알갱이는 한 번 그려 텍스처로 굳힌다. 움직일 때마다 수천 개를 다시 찍으면 프레임이 튄다.
+        .drawingGroup()
         .opacity(0.05)
         .blendMode(.overlay)
         .allowsHitTesting(false)
@@ -618,18 +633,13 @@ private struct PlasticGrain: View {
 }
 
 private extension View {
-    /// 안으로 파인 느낌. 예전에는 테두리를 blur로 번지게 했는데, 한 화면에 여러 개가
-    /// 겹치면 A15에서 프레임이 떨어진다. 위에서 떨어지는 그늘 하나로 같은 인상을 낸다.
+    /// SwiftUI에 inner shadow가 없어서 안쪽으로 번지는 테두리로 만든다.
     func innerShadow(radius: CGFloat, color: Color, width: CGFloat) -> some View {
         overlay {
             RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [color, color.opacity(0), .clear],
-                        startPoint: .top,
-                        endPoint: .center
-                    )
-                )
+                .stroke(color, lineWidth: width)
+                .blur(radius: width)
+                .mask { RoundedRectangle(cornerRadius: radius, style: .continuous) }
                 .allowsHitTesting(false)
         }
     }
