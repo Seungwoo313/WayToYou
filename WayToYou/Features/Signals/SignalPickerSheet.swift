@@ -169,6 +169,12 @@ private struct ChassisSurface: View {
                 .offset(y: Keypad.chassisThickness)
                 .shadow(color: .black.opacity(0.72), radius: 18, y: 24)
 
+            // 위로 삐져나온 윗면. 아래에 옆면 두께가 보이는 만큼 위에도 실제 띠가 있어야
+            // 같은 물건으로 읽힌다. 위에서 빛이 오니 이 면이 몸통에서 가장 밝다.
+            outer
+                .fill(Keypad.chassisCrownFill)
+                .offset(y: -Keypad.chassisCrown)
+
             // 사방을 두르는 테두리. 빛을 정면으로 받아 가장 밝다.
             outer
                 .fill(Keypad.chassisRimFill)
@@ -184,7 +190,7 @@ private struct ChassisSurface: View {
                 .fill(Keypad.chassisFill)
                 .innerShadow(
                     radius: Keypad.chassisRadius - Keypad.chassisRim,
-                    color: .black.opacity(0.28),
+                    color: .black.opacity(0.16),
                     width: 4
                 )
                 .overlay { inner.strokeBorder(Keypad.recessEdge, lineWidth: 1) }
@@ -658,6 +664,8 @@ private enum Keypad {
     /// 손에 잡히는 기계로 보이려면 화면 폭을 다 먹으면 안 된다.
     static let chassisMaxWidth: CGFloat = 330
     static let chassisRim: CGFloat = 7
+    /// 위로 보이는 윗면 띠. 아래 옆면 두께와 짝이 맞게 그보다 조금 얇다.
+    static let chassisCrown: CGFloat = 5
     /// 텍스처로 굳힐 때 바깥 그림자가 잘리지 않도록 잡아 두는 여백.
     /// 몸통 그림자가 아래로 `y + radius`만큼 번지므로 그보다 넉넉해야 한다.
     static let rasterMargin: CGFloat = 48
@@ -701,11 +709,18 @@ private enum Keypad {
         endPoint: .bottom
     )
 
-    /// 위 모서리에만 얹는 두꺼운 하이라이트. 중간에서 사라져 아래 옆면과 부딪히지 않는다.
+    /// 위 모서리에만 얹는 하이라이트. 중간에서 사라져 아래 옆면과 부딪히지 않는다.
     static let rimCrown = LinearGradient(
-        colors: [.white.opacity(0.75), .white.opacity(0.12), .clear],
+        colors: [.white.opacity(0.55), .white.opacity(0.08), .clear],
         startPoint: .top,
         endPoint: .center
+    )
+
+    /// 위로 삐져나오는 윗면. 아래 옆면과 짝이 되는 띠라 몸통에서 가장 밝다.
+    static let chassisCrownFill = LinearGradient(
+        colors: [Color(red: 0.995, green: 0.992, blue: 0.982), Color(red: 0.930, green: 0.922, blue: 0.902)],
+        startPoint: .top,
+        endPoint: .bottom
     )
 
     /// 테두리 안쪽 윗판은 한 단 내려앉아 있어 조금 어둡다.
@@ -729,8 +744,10 @@ private enum Keypad {
     )
 
     /// 파인 자리의 테두리. 위쪽은 그늘, 아래쪽은 빛을 받는다.
+    /// 위아래 대비를 세게 주면 같은 한 줄이 위에서는 검은 선, 아래에서는 흰 선으로 갈려
+    /// 옆면을 따라 올라갈수록 다른 물건처럼 보인다. 가운데를 거의 투명하게 두어 잇는다.
     static let recessEdge = LinearGradient(
-        colors: [.black.opacity(0.65), .white.opacity(0.35)],
+        colors: [.black.opacity(0.28), .black.opacity(0.05), .white.opacity(0.22)],
         startPoint: .top,
         endPoint: .bottom
     )
