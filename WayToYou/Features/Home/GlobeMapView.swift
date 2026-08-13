@@ -633,8 +633,6 @@ struct GlobeMapView: UIViewRepresentable {
         private weak var mapView: NativeGlobeMapView?
         private var annotationsByID: [GlobeProfileMarker.ID: GlobeProfileAnnotation] = [:]
         private var latestMarkers: [GlobeProfileMarker] = []
-        /// 지도에 한 번이라도 반영했는지. 첫 반영 전에는 값이 같아도 건너뛰면 안 된다.
-        private var hasAppliedMapContent = false
         private var latestRoute: CityRoute?
         private var latestShowsRouteHeart = true
         private var latestAnimatesRouteHeart = true
@@ -754,31 +752,17 @@ struct GlobeMapView: UIViewRepresentable {
             routeHeartEmoji: String,
             in mapView: NativeGlobeMapView
         ) {
-            // SwiftUI는 화면 어딘가가 바뀔 때마다 `updateUIView`를 부른다. 시계가 1초
-            // 넘어가거나 시트가 열리는 것만으로도 여기까지 온다. 그때마다 아래로 내려가면
-            // 최대 257개 투영 probe의 화면 좌표를 다시 읽는데, 그 일이 애니메이션 첫
-            // 프레임과 겹치면 그 프레임이 통째로 늦는다. 지도에 들어갈 값이 실제로
-            // 달라졌을 때만 내려간다.
-            let unchanged = hasAppliedMapContent
-                && latestMarkers == markers
-                && latestRoute == route
-                && latestShowsRouteHeart == showsRouteHeart
-                && latestAnimatesRouteHeart == animatesRouteHeart
-                && latestRouteHeartEmoji == routeHeartEmoji
-
             latestMarkers = markers
             latestRoute = route
             latestShowsRouteHeart = showsRouteHeart
             latestAnimatesRouteHeart = animatesRouteHeart
             latestRouteHeartEmoji = routeHeartEmoji
             guard !needsInitialFraming,
-                  !defersMarkerSyncUntilCameraCommit,
-                  !unchanged else { return }
+                  !defersMarkerSyncUntilCameraCommit else { return }
             applyLatestMapContent(in: mapView)
         }
 
         private func applyLatestMapContent(in mapView: NativeGlobeMapView) {
-            hasAppliedMapContent = true
             applyLatestRoute(in: mapView)
             applyLatestMarkers(in: mapView)
         }
