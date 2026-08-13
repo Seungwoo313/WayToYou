@@ -14,7 +14,8 @@ struct SignalPickerSheet: View {
     let partnerName: String
     let partnerCityName: String
     let partnerTimeZone: TimeZone
-    let partnerSignal: SignalEvent?
+    let myTimeZone: TimeZone
+    let distanceKilometers: Int
     let now: Date
     let onSelect: (CoupleSignal) -> Void
     let onEditKey: (Int, SignalKey) -> Void
@@ -32,10 +33,12 @@ struct SignalPickerSheet: View {
                 Nameplate(isEditing: isEditingKeys, onToggleEditing: toggleEditing)
 
                 DisplayPanel(
-                    clock: partnerClock,
-                    elapsed: partnerElapsed,
-                    leftLabel: isEditingKeys ? "EDIT" : partnerName,
-                    rightLabel: isEditingKeys ? "HOLD KEY" : partnerCityName
+                    value: distanceDigits,
+                    unit: "KM",
+                    topLeft: isEditingKeys ? "EDIT" : partnerName,
+                    topRight: isEditingKeys ? "TAP KEY" : partnerCityName,
+                    bottomLeft: isEditingKeys ? "EMOJI" : timeOffset,
+                    bottomRight: isEditingKeys ? "+ LABEL" : partnerClock
                 )
 
                 KeyWell(
@@ -90,6 +93,11 @@ struct SignalPickerSheet: View {
         onEditKey(index, SignalKey(signal: signal, label: draftLabel))
     }
 
+    /// 큰 숫자는 두 도시 사이 거리다. 이 기계가 켜져 있는 이유 그 자체라 시각보다 앞에 둔다.
+    private var distanceDigits: String {
+        String(max(0, distanceKilometers))
+    }
+
     private var partnerClock: String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = partnerTimeZone
@@ -97,13 +105,16 @@ struct SignalPickerSheet: View {
         return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
     }
 
-    /// 상대 신호가 온 지 얼마나 됐는지. 기계의 작은 보조 숫자라 두세 글자를 넘기지 않는다.
-    private var partnerElapsed: String {
-        guard let sentAt = partnerSignal?.sentAt else { return "--" }
-        let minutes = max(0, Int(now.timeIntervalSince(sentAt) / 60))
-        if minutes < 60 { return "\(minutes)m" }
-        let hours = minutes / 60
-        return hours < 24 ? "\(hours)h" : "--"
+    /// 상대가 나보다 몇 시간 앞인지. 30분 시차가 있는 도시가 있어 분도 함께 본다.
+    private var timeOffset: String {
+        let delta = partnerTimeZone.secondsFromGMT(for: now) - myTimeZone.secondsFromGMT(for: now)
+        if delta == 0 { return "SAME HOUR" }
+        let sign = delta > 0 ? "+" : "-"
+        let minutes = abs(delta) / 60
+        let remainder = minutes % 60
+        return remainder == 0
+            ? "\(sign)\(minutes / 60)H"
+            : String(format: "%@%d:%02d", sign, minutes / 60, remainder)
     }
 }
 
@@ -175,18 +186,20 @@ private struct GearButton: View {
 // MARK: - 디스플레이
 
 private struct DisplayPanel: View {
-    let clock: String
-    let elapsed: String
-    let leftLabel: String
-    let rightLabel: String
+    let value: String
+    let unit: String
+    let topLeft: String
+    let topRight: String
+    let bottomLeft: String
+    let bottomRight: String
 
     private let shape = RoundedRectangle(cornerRadius: Keypad.glassRadius, style: .continuous)
 
     var body: some View {
         VStack(spacing: 8) {
-            LabelStrip(left: "SIGNAL", right: "LINK")
+            LabelStrip(left: topLeft, right: topRight)
             readout
-            LabelStrip(left: leftLabel, right: rightLabel)
+            LabelStrip(left: bottomLeft, right: bottomRight)
         }
         .padding(9)
         .background { glass }
@@ -195,12 +208,13 @@ private struct DisplayPanel: View {
     }
 
     private var readout: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            SevenSegmentClock(text: clock)
-            Text(elapsed)
-                .font(.system(size: 15, weight: .bold, design: .monospaced))
+        HStack(alignment: .bottom, spacing: 8) {
+            SevenSegmentReadout(text: value)
+            Text(unit)
+                .font(.system(size: 14, weight: .black, design: .monospaced))
+                .tracking(1)
                 .foregroundStyle(Keypad.ledDim)
-                .padding(.bottom, 3)
+                .padding(.bottom, 4)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 2)
@@ -247,11 +261,11 @@ private struct LabelStrip: View {
     }
 }
 
-private struct SevenSegmentClock: View {
+private struct SevenSegmentReadout: View {
     let text: String
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             ForEach(Array(text.enumerated()), id: \.offset) { _, character in
                 if let value = character.wholeNumberValue {
                     SevenSegmentDigit(value: value)
@@ -556,10 +570,10 @@ private enum Keypad {
     static let digitWidth: CGFloat = 25
     static let digitHeight: CGFloat = 42
 
-    static let led = Color(red: 1.00, green: 0.21, blue: 0.17)
-    static let ledDim = Color(red: 0.78, green: 0.14, blue: 0.11)
-    static let ledOff = Color(red: 0.17, green: 0.035, blue: 0.03)
-    static let glass = Color(red: 0.055, green: 0.045, blue: 0.045)
+    static let led = Color(red: 0.25, green: 1.00, blue: 0.52)
+    static let ledDim = Color(red: 0.11, green: 0.72, blue: 0.35)
+    static let ledOff = Color(red: 0.035, green: 0.16, blue: 0.08)
+    static let glass = Color(red: 0.030, green: 0.055, blue: 0.040)
     static let well = Color(red: 0.700, green: 0.688, blue: 0.660)
     static let gearWell = Color(red: 0.760, green: 0.748, blue: 0.720)
     static let engraved = Color(red: 0.38, green: 0.37, blue: 0.35)

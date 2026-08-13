@@ -333,7 +333,8 @@ struct ContentView: View {
                 partnerName: store.partnerProfile?.displayName ?? "상대",
                 partnerCityName: store.partnerCity.name,
                 partnerTimeZone: store.partnerCity.timeZone,
-                partnerSignal: store.latestSignal(.incoming, at: now),
+                myTimeZone: store.homeCity.timeZone,
+                distanceKilometers: store.distanceKilometers,
                 now: now,
                 onSelect: { signal in
                     route = .none
