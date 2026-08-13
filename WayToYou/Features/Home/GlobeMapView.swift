@@ -1730,7 +1730,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     static let reuseIdentifier = "GlobeProfileAnnotationView"
     static let canvasSize = CGSize(width: 68, height: 92)
     static let avatarRadius: CGFloat = 23
-    /// 핀/줄을 숨긴 뒤면 표현의 실제 표시 영역(배터리·아바타·배지).
+    /// 지구 뒷면 방향 표현의 실제 표시 영역(배터리·아바타·배지).
     static let backsideContentHeight: CGFloat = 77
 
     private enum Layout {
@@ -1738,23 +1738,20 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         static let avatarSize = GlobeProfileAnnotationView.avatarRadius * 2
         /// 배터리 바(17pt) + 여백(5pt) 아래에서 아바타가 시작한다.
         static let avatarTop: CGFloat = 22
+        static let avatarCenterY = avatarTop + avatarSize / 2
         static let batteryHeight: CGFloat = 17
         static let batteryBodySize = CGSize(width: 21, height: 10.5)
         static let batteryCapSize = CGSize(width: 1.6, height: 4.4)
-        static let dotSize: CGFloat = 6
-        static let dotOriginY: CGFloat = 84
-        static let dotCenterY = dotOriginY + dotSize / 2
     }
 
-    static var pinCenterOffset: CGPoint {
+    /// 도시 좌표가 프로필 원의 중심과 정확히 겹치도록 annotation 캔버스를 보정한다.
+    static var avatarCenterOffset: CGPoint {
         CGPoint(
             x: 0,
-            y: Layout.canvasSize.height / 2 - Layout.dotCenterY
+            y: Layout.canvasSize.height / 2 - Layout.avatarCenterY
         )
     }
 
-    private let stemView = UIView()
-    private let dotView = UIView()
     private let selectionHaloView = UIView()
     private let avatarView = UIView()
     private let avatarImageView = UIImageView()
@@ -1777,7 +1774,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
 
         bounds = CGRect(origin: .zero, size: Layout.canvasSize)
-        centerOffset = Self.pinCenterOffset
+        centerOffset = Self.avatarCenterOffset
         backgroundColor = .clear
         isOpaque = false
         clipsToBounds = false
@@ -1786,18 +1783,6 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         collisionMode = .circle
         isAccessibilityElement = true
         accessibilityTraits = [.button]
-
-        stemView.backgroundColor = UIColor.white.withAlphaComponent(0.82)
-        stemView.layer.cornerRadius = 0.5
-        addSubview(stemView)
-
-        dotView.backgroundColor = .white
-        dotView.layer.cornerRadius = Layout.dotSize / 2
-        dotView.layer.shadowColor = UIColor.black.cgColor
-        dotView.layer.shadowOpacity = 0.25
-        dotView.layer.shadowRadius = 2
-        dotView.layer.shadowOffset = .zero
-        addSubview(dotView)
 
         selectionHaloView.backgroundColor = UIColor.white.withAlphaComponent(0.18)
         selectionHaloView.alpha = 0
@@ -1922,20 +1907,6 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         tapControl.frame = avatarView.frame.insetBy(dx: -7, dy: -7)
 
         layoutBatteryPill()
-
-        let avatarBottom = Layout.avatarTop + Layout.avatarSize
-        stemView.frame = CGRect(
-            x: bounds.midX - 0.5,
-            y: avatarBottom - 2,
-            width: 1,
-            height: Layout.dotOriginY - avatarBottom + 2
-        )
-        dotView.frame = CGRect(
-            x: bounds.midX - Layout.dotSize / 2,
-            y: Layout.dotOriginY,
-            width: Layout.dotSize,
-            height: Layout.dotSize
-        )
     }
 
     private func layoutBatteryPill() {
@@ -2012,10 +1983,6 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
 
     func setBacksidePresentation(_ isBacksidePresentation: Bool) {
         self.isBacksidePresentation = isBacksidePresentation
-        stemView.isHidden = isBacksidePresentation
-        dotView.isHidden = isBacksidePresentation
-        stemView.alpha = 1
-        dotView.alpha = 1
         avatarView.alpha = isBacksidePresentation ? 0.94 : 1
         accessibilityHint = "두 번 탭하면 프로필 상태를 표시합니다"
         updateAccessibilityValue()
