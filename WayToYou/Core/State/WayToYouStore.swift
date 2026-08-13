@@ -13,6 +13,8 @@ final class WayToYouStore {
     private(set) var partnerCityID: String
     private(set) var parcels: [Parcel]
     private(set) var signals: [SignalEvent]
+    /// Signal 키패드의 키캡 9개. 사용자마다 다르고 서버에 올리지 않는다.
+    private(set) var signalKeys: [SignalKey]
     private(set) var heartBursts: [HeartBurst]
     private(set) var backendIsReady = false
     private(set) var connectionIsWorking = false
@@ -74,6 +76,7 @@ final class WayToYouStore {
         static let partner = "wty.partnerCityID"
         static let parcels = "wty.parcels"
         static let signals = "wty.signals"
+        static let signalKeys = "wty.signalKeys"
         static let heartBursts = "wty.heartBursts"
         static let demoMode = "wty.demoMode"
     }
@@ -109,6 +112,7 @@ final class WayToYouStore {
         demoMode = defaults.object(forKey: Key.demoMode) as? Bool ?? true
         parcels = Self.decode([Parcel].self, from: defaults.data(forKey: Key.parcels)) ?? []
         signals = Self.decode([SignalEvent].self, from: defaults.data(forKey: Key.signals)) ?? []
+        signalKeys = Self.signalKeys(from: defaults.data(forKey: Key.signalKeys))
         heartBursts = Self.decode([HeartBurst].self, from: defaults.data(forKey: Key.heartBursts)) ?? []
 
         if let myProfile {
@@ -556,6 +560,16 @@ final class WayToYouStore {
         save()
     }
 
+    /// 키패드 한 칸을 바꾼다. 같은 이모지가 다른 칸에 이미 있으면 두 칸을 맞바꿔 중복을 막는다.
+    func setSignalKey(_ key: SignalKey, at index: Int) {
+        guard signalKeys.indices.contains(index), signalKeys[index] != key else { return }
+        if let duplicate = signalKeys.firstIndex(where: { $0.signal == key.signal }), duplicate != index {
+            signalKeys[duplicate] = signalKeys[index]
+        }
+        signalKeys[index] = key
+        save()
+    }
+
     @discardableResult
     func sendSignal(_ signal: CoupleSignal) async -> Bool {
         #if DEBUG
@@ -897,7 +911,15 @@ final class WayToYouStore {
         defaults.set(partnerCityID, forKey: storageKey(Key.partner))
         defaults.set(Self.encode(parcels), forKey: storageKey(Key.parcels))
         defaults.set(Self.encode(signals), forKey: storageKey(Key.signals))
+        defaults.set(Self.encode(signalKeys), forKey: storageKey(Key.signalKeys))
         defaults.set(Self.encode(heartBursts), forKey: storageKey(Key.heartBursts))
+    }
+
+    /// 저장된 키캡이 없거나 개수가 어긋나면 출고 배열로 채운다.
+    private static func signalKeys(from data: Data?) -> [SignalKey] {
+        guard let stored = decode([SignalKey].self, from: data),
+              stored.count == SignalKey.count else { return SignalKey.defaults }
+        return stored
     }
 
     private static func encode<T: Encodable>(_ value: T) -> Data? {
@@ -946,6 +968,7 @@ final class WayToYouStore {
         demoMode = defaults.object(forKey: storageKey(Key.demoMode)) as? Bool ?? true
         parcels = Self.decode([Parcel].self, from: defaults.data(forKey: storageKey(Key.parcels))) ?? []
         signals = Self.decode([SignalEvent].self, from: defaults.data(forKey: storageKey(Key.signals))) ?? []
+        signalKeys = Self.signalKeys(from: defaults.data(forKey: storageKey(Key.signalKeys)))
         heartBursts = Self.decode(
             [HeartBurst].self,
             from: defaults.data(forKey: storageKey(Key.heartBursts))

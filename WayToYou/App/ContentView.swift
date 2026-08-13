@@ -328,13 +328,23 @@ struct ContentView: View {
         switch destination {
         case .signal:
             SignalPickerSheet(
-                selectedSignal: store.latestSignal(.outgoing, at: now)?.signal
-            ) { signal in
-                route = .none
-                UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                Task { _ = await store.sendSignal(signal) }
-            }
-            .presentationDetents([.height(270), .medium])
+                keys: store.signalKeys,
+                selectedSignal: store.latestSignal(.outgoing, at: now)?.signal,
+                partnerName: store.partnerProfile?.displayName ?? "상대",
+                partnerCityName: store.partnerCity.name,
+                partnerTimeZone: store.partnerCity.timeZone,
+                partnerSignal: store.latestSignal(.incoming, at: now),
+                now: now,
+                onSelect: { signal in
+                    route = .none
+                    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                    Task { _ = await store.sendSignal(signal) }
+                },
+                onEditKey: { index, key in
+                    store.setSignalKey(key, at: index)
+                }
+            )
+            .presentationDetents([.large])
             .presentationDragIndicator(.visible)
 
         case .compose:

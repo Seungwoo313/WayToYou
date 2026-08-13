@@ -43,43 +43,115 @@ struct CoupleCity: Identifiable, Hashable, Codable {
 
 // MARK: - Signal
 
-enum CoupleSignal: String, CaseIterable, Identifiable, Codable {
-    case sleeping
-    case focusing
-    case free
-    case out
-    case resting
+/// 이모지 하나가 곧 신호다. 정해진 목록이 아니라 사용자가 키캡에 직접 올리는 값이라
+/// 고정 enum이 아니라 문자열을 감싼 값으로 둔다.
+///
+/// 서버에는 이모지를 그대로 저장한다. 예전 5개 슬러그(`sleeping` 등)는 읽을 때만 이모지로 옮긴다.
+struct CoupleSignal: Identifiable, Hashable, Codable, RawRepresentable {
+    let rawValue: String
+
+    init(rawValue: String) {
+        self.rawValue = Self.canonical(rawValue)
+    }
+
+    init(_ emoji: String) {
+        self.init(rawValue: emoji)
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.init(rawValue: try container.decode(String.self))
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 
     var id: String { rawValue }
 
-    var title: String {
-        switch self {
-        case .sleeping: "자는 중"
-        case .focusing: "집중 중"
-        case .free: "여유 있어"
-        case .out: "외출 중"
-        case .resting: "쉬는 중"
-        }
+    var emoji: String { rawValue }
+
+    /// 기본 키캡에는 이름이 있고, 사용자가 직접 올린 이모지는 이모지 자체가 이름이다.
+    var title: String { Self.names[rawValue] ?? rawValue }
+
+    static let sleeping = CoupleSignal("😴")
+    static let focusing = CoupleSignal("💻")
+    static let free = CoupleSignal("☕️")
+    static let out = CoupleSignal("🚶")
+    static let resting = CoupleSignal("🏠")
+
+    /// 키캡에 올릴 수 있는 값인지 검사한다. 글자가 아니라 이모지 하나만 받는다.
+    static func keycap(from input: String) -> CoupleSignal? {
+        guard let first = input.trimmingCharacters(in: .whitespacesAndNewlines).first,
+              first.isEmojiKeycap else { return nil }
+        return CoupleSignal(String(first))
     }
 
-    var partnerCaption: String {
-        switch self {
-        case .sleeping: "지금 자고 있어요"
-        case .focusing: "무언가에 집중하고 있어요"
-        case .free: "잠깐 여유가 있어요"
-        case .out: "밖에 나와 있어요"
-        case .resting: "편하게 쉬고 있어요"
-        }
+    private static let names: [String: String] = [
+        "😴": "자는 중",
+        "💻": "집중 중",
+        "☕️": "여유 있어",
+        "🚶": "외출 중",
+        "🏠": "쉬는 중"
+    ]
+
+    private static let legacySlugs: [String: String] = [
+        "sleeping": "😴",
+        "focusing": "💻",
+        "free": "☕️",
+        "out": "🚶",
+        "resting": "🏠"
+    ]
+
+    private static func canonical(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return legacySlugs[trimmed.lowercased()] ?? trimmed
+    }
+}
+
+/// 키패드 한 칸. 기계에는 이모지만 새기고, 설명은 나중에 알림 문구로 쓰려고 들고만 있는다.
+struct SignalKey: Identifiable, Hashable, Codable {
+    let signal: CoupleSignal
+    var label: String
+
+    var id: String { signal.id }
+    var emoji: String { signal.emoji }
+
+    /// 알림 한 줄에 들어가야 해서 짧게 자른다.
+    static let labelLimit = 10
+
+    init(signal: CoupleSignal, label: String) {
+        self.signal = signal
+        self.label = Self.trimmed(label)
     }
 
-    var emoji: String {
-        switch self {
-        case .sleeping: "😴"
-        case .focusing: "💻"
-        case .free: "☕️"
-        case .out: "🚶"
-        case .resting: "🏠"
-        }
+    static func trimmed(_ label: String) -> String {
+        String(label.trimmingCharacters(in: .whitespacesAndNewlines).prefix(labelLimit))
+    }
+
+    /// 3×3 키패드의 출고 상태. 사용자가 언제든 바꾼다.
+    static let defaults: [SignalKey] = [
+        SignalKey(signal: .sleeping, label: "자는 중"),
+        SignalKey(signal: .focusing, label: "집중 중"),
+        SignalKey(signal: .free, label: "여유 있어"),
+        SignalKey(signal: .out, label: "외출 중"),
+        SignalKey(signal: .resting, label: "쉬는 중"),
+        SignalKey(signal: CoupleSignal("🍚"), label: "밥 먹는 중"),
+        SignalKey(signal: CoupleSignal("🏃"), label: "운동 중"),
+        SignalKey(signal: CoupleSignal("🚌"), label: "이동 중"),
+        SignalKey(signal: CoupleSignal("🎧"), label: "음악 듣는 중")
+    ]
+
+    static let count = 9
+}
+
+private extension Character {
+    /// 숫자·문자 키를 눌러도 키캡이 바뀌지 않도록, 그림으로 보이는 이모지만 통과시킨다.
+    var isEmojiKeycap: Bool {
+        guard let scalar = unicodeScalars.first else { return false }
+        return scalar.properties.isEmojiPresentation
+            || (scalar.properties.isEmoji && unicodeScalars.count > 1)
     }
 }
 
