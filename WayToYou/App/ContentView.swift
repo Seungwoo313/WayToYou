@@ -358,7 +358,6 @@ struct ContentView: View {
     private var signalMachine: some View {
         SignalPickerSheet(
             keys: store.signalKeys,
-            selectedSignal: store.latestSignal(.outgoing, at: now)?.signal,
             isPresented: isSignalOpen,
             partnerName: store.partnerProfile?.displayName ?? "상대",
             partnerCityName: store.partnerCity.name,

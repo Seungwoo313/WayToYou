@@ -13,7 +13,6 @@ struct SignalPickerSheet: View {
     static let parkedTravel: CGFloat = 1_000
 
     let keys: [SignalKey]
-    let selectedSignal: CoupleSignal?
     /// 기계는 항상 트리에 있으므로 닫혔다는 사실을 직접 받아 고른 키를 되돌린다.
     let isPresented: Bool
     let partnerName: String
@@ -33,15 +32,8 @@ struct SignalPickerSheet: View {
     @State private var draftLabel = ""
     @State private var dragOffset: CGFloat = 0
     /// 키를 누르면 눌리기만 하고, 보내는 것은 엔터가 맡는다.
+    /// 기계는 늘 아무것도 눌리지 않은 채로 열린다. 지난번에 보낸 것은 이미 지구본 위에 있다.
     @State private var stagedSignal: CoupleSignal?
-    /// 한 번이라도 키를 만졌는지. 골랐다가 풀면 아무것도 눌리지 않은 상태로 돌아가야 하는데,
-    /// 그때 마지막으로 보낸 신호가 다시 켜지면 풀린 것처럼 보이지 않는다.
-    @State private var hasTouchedKeys = false
-
-    /// 지금 램프가 켜져 있어야 하는 신호. 손대기 전에는 마지막으로 보낸 것.
-    private var activeSignal: CoupleSignal? {
-        hasTouchedKeys ? stagedSignal : selectedSignal
-    }
 
     var body: some View {
         machine
@@ -50,7 +42,6 @@ struct SignalPickerSheet: View {
             .onChange(of: isPresented) { _, presented in
                 if !presented {
                     stagedSignal = nil
-                    hasTouchedKeys = false
                     isEditingKeys = false
                 }
             }
@@ -84,7 +75,7 @@ struct SignalPickerSheet: View {
 
             KeyWell(
                 keys: keys,
-                activeSignal: activeSignal,
+                activeSignal: stagedSignal,
                 isEditing: isEditingKeys,
                 canSend: stagedSignal != nil,
                 onStage: stage,
@@ -139,7 +130,6 @@ struct SignalPickerSheet: View {
 
     /// 눌린 키를 다시 누르면 풀린다.
     private func stage(_ signal: CoupleSignal) {
-        hasTouchedKeys = true
         stagedSignal = stagedSignal == signal ? nil : signal
     }
 
