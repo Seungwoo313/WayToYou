@@ -96,11 +96,10 @@ struct ContentView: View {
             }
             // Signal 기계는 시트가 아니라 오버레이다. iOS 26 시트는 배경 유리를 강제로
             // 그려서 기계 옆에 판이 남는데, 이건 기계만 화면 밑에서 올라와야 한다.
+            .overlay { signalScrim.animation(signalMachineMotion, value: isSignalOpen) }
             .overlay(alignment: .bottom) {
-                signalMachine
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                signalMachine.animation(signalMachineMotion, value: isSignalOpen)
             }
-            .animation(.spring(response: 0.46, dampingFraction: 0.88), value: route.presented == .signal)
             .sheet(item: $route.sheetPresented) { destination in
                 sheet(for: destination)
             }
@@ -330,10 +329,31 @@ struct ContentView: View {
 
     // MARK: - Sheets
 
+    private var isSignalOpen: Bool { route.presented == .signal }
+
+    /// 올라올 때는 살짝 튕기고, 내려갈 때는 미련 없이 빠진다.
+    private var signalMachineMotion: Animation {
+        isSignalOpen
+            ? .spring(response: 0.38, dampingFraction: 0.74)
+            : .easeIn(duration: 0.2)
+    }
+
+    /// 기계 밖을 누르면 내려간다. 지구를 가리지 않게 옅게만 덮는다.
+    @ViewBuilder
+    private var signalScrim: some View {
+        if isSignalOpen {
+            Color.black.opacity(0.28)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { route = .none }
+                .transition(.opacity)
+        }
+    }
+
     /// 시트가 아니라 오버레이로 올라오는 Signal 기계.
     @ViewBuilder
     private var signalMachine: some View {
-        if route.presented == .signal {
+        if isSignalOpen {
             SignalPickerSheet(
                 keys: store.signalKeys,
                 selectedSignal: store.latestSignal(.outgoing, at: now)?.signal,
@@ -353,6 +373,8 @@ struct ContentView: View {
                 },
                 onDismiss: { route = .none }
             )
+            // 물건이 밑에서 올라오는 것이라 페이드를 섞지 않는다. 섞으면 실체가 흐려진다.
+            .transition(.move(edge: .bottom))
         }
     }
 

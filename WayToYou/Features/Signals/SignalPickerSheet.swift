@@ -28,25 +28,17 @@ struct SignalPickerSheet: View {
     @State private var dragOffset: CGFloat = 0
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            // 기계 밖을 누르면 내려간다. 지구를 가리지 않게 아주 옅게만 덮는다.
-            Color.black.opacity(0.28)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture(perform: onDismiss)
-
-            machine
-                .offset(y: dragOffset)
-                .gesture(dismissDrag)
-        }
-        .alert("키캡 바꾸기", isPresented: isPresentingEditor) {
-            TextField("이모지", text: $draftEmoji)
-            TextField("설명 \(SignalKey.labelLimit)자 이내", text: $draftLabel)
-            Button("취소", role: .cancel) { editingIndex = nil }
-            Button("저장") { commitEditing() }
-        } message: {
-            Text("설명은 기계에 새기지 않고 나중에 알림에만 써요")
-        }
+        machine
+            .offset(y: dragOffset)
+            .gesture(dismissDrag)
+            .alert("키캡 바꾸기", isPresented: isPresentingEditor) {
+                TextField("이모지", text: $draftEmoji)
+                TextField("설명 \(SignalKey.labelLimit)자 이내", text: $draftLabel)
+                Button("취소", role: .cancel) { editingIndex = nil }
+                Button("저장") { commitEditing() }
+            } message: {
+                Text("설명은 기계에 새기지 않고 나중에 알림에만 써요")
+            }
     }
 
     private var machine: some View {
@@ -72,6 +64,9 @@ struct SignalPickerSheet: View {
         }
         .padding(Keypad.chassisPadding)
         .background(ChassisSurface())
+        // 기계 전체를 한 장으로 합성한다. 올라오고 내려갈 때 텍스처 하나만 움직이면 되므로
+        // 알갱이·그림자·번짐을 매 프레임 다시 그리지 않는다.
+        .compositingGroup()
         .frame(maxWidth: Keypad.chassisMaxWidth)
         .padding(.horizontal, Metric.screenPadding)
         .padding(.bottom, Keypad.chassisThickness + Metric.m)
@@ -611,6 +606,8 @@ private struct PlasticGrain: View {
                 )
             }
         }
+        // 알갱이는 한 번 그려 텍스처로 굳힌다. 움직일 때마다 수천 개를 다시 찍으면 프레임이 튄다.
+        .drawingGroup()
         .opacity(0.05)
         .blendMode(.overlay)
         .allowsHitTesting(false)
