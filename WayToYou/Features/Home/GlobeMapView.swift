@@ -517,6 +517,9 @@ struct GlobeMapView: UIViewRepresentable {
         private var markerPlacementGeneration = 0
         private var markerPlacementFramesRemaining = 0
         private var markerPlacementDisplayLink: CADisplayLink?
+        private var nearbyFramingGeneration = 0
+        private var nearbyFramingFramesRemaining = 0
+        private var nearbyFramingDisplayLink: CADisplayLink?
         private var backsideRevealFramesRemaining = 0
         private var backsideRevealDisplayLink: CADisplayLink?
         private var isUserCameraMotionActive = false
@@ -574,6 +577,9 @@ struct GlobeMapView: UIViewRepresentable {
         func disconnect() {
             markerPlacementDisplayLink?.invalidate()
             markerPlacementDisplayLink = nil
+            nearbyFramingDisplayLink?.invalidate()
+            nearbyFramingDisplayLink = nil
+            nearbyFramingFramesRemaining = 0
             backsideRevealDisplayLink?.invalidate()
             backsideRevealDisplayLink = nil
             backsideRevealFramesRemaining = 0
@@ -754,6 +760,27 @@ struct GlobeMapView: UIViewRepresentable {
             updateMarkerRepresentations(in: mapView)
             syncSelection(in: mapView)
             resolveMarkerOrderOnce(in: mapView)
+            applyCoincidentMarkerOffsets(in: mapView)
+        }
+
+        /// 두 사람이 같은 도시 좌표를 쓰면 카메라를 확대해도 점이 분리되지 않는다.
+        /// 도시 좌표 자체는 유지하면서 프로필 사진만 작은 한 쌍으로 나란히 놓는다.
+        private func applyCoincidentMarkerOffsets(in mapView: MKMapView) {
+            for (id, annotation) in annotationsByID {
+                (mapView.view(for: annotation) as? GlobeProfileAnnotationView)?
+                    .setCoordinateOffsetX(coincidentCoordinateOffsetX(for: id))
+            }
+        }
+
+        private func coincidentCoordinateOffsetX(
+            for id: GlobeProfileMarker.ID
+        ) -> CGFloat {
+            guard latestRoute?.hasVisibleSpan == false else { return 0 }
+            // 두 annotation의 전체 접근성 canvas가 겹치지 않게 한 폭만큼 분리한다.
+            let centerGap = GlobeProfileAnnotationView.canvasSize.width
+            return markerOrder.wrappedValue.side(for: id) == .left
+                ? -centerGap / 2
+                : centerGap / 2
         }
 
         private func backsideIndicator(
@@ -1232,6 +1259,9 @@ struct GlobeMapView: UIViewRepresentable {
             defersMarkerSyncUntilCameraCommit = true
             markerPlacementDisplayLink?.invalidate()
             markerPlacementDisplayLink = nil
+            nearbyFramingDisplayLink?.invalidate()
+            nearbyFramingDisplayLink = nil
+            nearbyFramingFramesRemaining = 0
             framingGeneration += 1
 
             guard let mapView else { return }
@@ -1287,9 +1317,201 @@ struct GlobeMapView: UIViewRepresentable {
                 defersMarkerSyncUntilCameraCommit = false
                 mapView.layoutIfNeeded()
                 applyLatestMapContent(in: mapView)
+                scheduleNearbyFraming(afterDisplayFrames: 2)
                 return
             }
             markerPlacementFramesRemaining -= 1
+        }
+
+        /// 먼저 검증된 전 지구 카메라와 annotation을 화면에 커밋한 다음,
+        /// 실제 profile 또는 중앙 Heart가 겹치는 Route만 MapKit 기본 카메라로 확대한다.
+        private func scheduleNearbyFraming(afterDisplayFrames frameCount: Int) {
+            nearbyFramingDisplayLink?.invalidate()
+            nearbyFramingGeneration = framingGeneration
+            nearbyFramingFramesRemaining = max(frameCount, 1)
+            let displayLink = CADisplayLink(
+                target: self,
+                selector: #selector(advanceNearbyFraming)
+            )
+            nearbyFramingDisplayLink = displayLink
+            displayLink.add(to: .main, forMode: .common)
+        }
+
+        @objc private func advanceNearbyFraming() {
+            guard nearbyFramingFramesRemaining > 1 else {
+                nearbyFramingDisplayLink?.invalidate()
+                nearbyFramingDisplayLink = nil
+                nearbyFramingFramesRemaining = 0
+                guard let mapView,
+                      !needsInitialFraming,
+                      !defersMarkerSyncUntilCameraCommit,
+                      framingGeneration == nearbyFramingGeneration,
+                      !hasActiveMapGesture(in: mapView) else { return }
+                applyNearbyFramingIfNeeded(in: mapView)
+                return
+            }
+            nearbyFramingFramesRemaining -= 1
+        }
+
+        private func applyNearbyFramingIfNeeded(in mapView: MKMapView) {
+            guard let route = latestRoute,
+                  route.id == cameraRouteID,
+                  route.hasVisibleSpan else { return }
+
+            let firstCoordinate = CLLocationCoordinate2D(
+                latitude: route.first.latitude,
+                longitude: route.first.longitude
+            )
+            let secondCoordinate = CLLocationCoordinate2D(
+                latitude: route.second.latitude,
+                longitude: route.second.longitude
+            )
+
+            // MapKit은 지구 뒷면 좌표도 유한한 화면 점으로 변환할 수 있다.
+            // 실제 카메라 앞면에 두 도시가 모두 있을 때만 근거리 확대를 허용한다.
+            let cameraCenter = SphereVector(
+                latitude: mapView.camera.centerCoordinate.latitude,
+                longitude: mapView.camera.centerCoordinate.longitude
+            )
+            let visibleRadius = GlobeMapView.visibleAngularRadius(in: mapView)
+            let horizonHeadroom = 1 * Double.pi / 180
+            let firstVector = SphereVector(
+                latitude: firstCoordinate.latitude,
+                longitude: firstCoordinate.longitude
+            )
+            let secondVector = SphereVector(
+                latitude: secondCoordinate.latitude,
+                longitude: secondCoordinate.longitude
+            )
+            guard cameraCenter.angularDistance(to: firstVector)
+                    < visibleRadius - horizonHeadroom,
+                  cameraCenter.angularDistance(to: secondVector)
+                    < visibleRadius - horizonHeadroom else { return }
+
+            let firstPoint = mapView.convert(firstCoordinate, toPointTo: mapView)
+            let secondPoint = mapView.convert(secondCoordinate, toPointTo: mapView)
+            guard firstPoint.x.isFinite,
+                  firstPoint.y.isFinite,
+                  secondPoint.x.isFinite,
+                  secondPoint.y.isFinite,
+                  mapView.bounds.contains(firstPoint),
+                  mapView.bounds.contains(secondPoint) else { return }
+
+            let currentGap = hypot(
+                secondPoint.x - firstPoint.x,
+                secondPoint.y - firstPoint.y
+            )
+            // profile끼리 닿지 않더라도 Route 중앙의 heartbeat 최대 크기까지
+            // 양쪽 profile과 4pt 이상 떨어져야 한다. Heart 설정을 껐다 켜도
+            // 카메라가 다시 움직이지 않도록 초기 framing에서 항상 이 공간을 예약한다.
+            let profileOverlapTrigger = GlobeProfileAnnotationView.avatarRadius * 2 + 4
+            let heartPoint = mapView.convert(route.midpointCoordinate, toPointTo: mapView)
+            let heartClearance = GlobeProfileAnnotationView.avatarRadius
+                + RouteHeartAnnotationView.maximumVisualRadius
+                + 4
+            let heartNeedsRoom: Bool
+            if heartPoint.x.isFinite,
+               heartPoint.y.isFinite,
+               mapView.bounds.contains(heartPoint) {
+                let firstHeartGap = hypot(
+                    heartPoint.x - firstPoint.x,
+                    heartPoint.y - firstPoint.y
+                )
+                let secondHeartGap = hypot(
+                    heartPoint.x - secondPoint.x,
+                    heartPoint.y - secondPoint.y
+                )
+                heartNeedsRoom = min(firstHeartGap, secondHeartGap) < heartClearance
+            } else {
+                heartNeedsRoom = false
+            }
+            guard currentGap > 0,
+                  currentGap < profileOverlapTrigger || heartNeedsRoom else { return }
+
+            let usableWidth = max(
+                mapView.bounds.width
+                    - mapView.layoutMargins.left
+                    - mapView.layoutMargins.right,
+                1
+            )
+            // 한 번 지역 화면으로 전환됐다면 두 도시가 화면 너비의 약 2/3를
+            // 쓰도록 충분히 들어가, 지역과 두 사람의 위치 관계가 분명하게 읽힌다.
+            let targetGap = min(max(usableWidth * 0.65, 236), 248)
+            // Heart 때문에 새로 확대되는 경계 조합도 반쯤 잘린 지구에 멈추지 않고
+            // 지역 지도까지 들어가도록 최소 확대량을 보장한다.
+            let requestedGap = max(targetGap, currentGap * 3.35)
+
+            // 작은 iPhone이나 가로 화면에서는 같은 확대율을 강제하지 않는다.
+            // Route 방향을 따라 두 68×92pt profile canvas 전체가 usable rect에
+            // 남을 수 있는 최대 중심 간격까지만 허용한다.
+            let usableBounds = mapView.bounds.inset(by: UIEdgeInsets(
+                top: 8,
+                left: mapView.layoutMargins.left + 8,
+                bottom: mapView.layoutMargins.bottom + 8,
+                right: mapView.layoutMargins.right + 8
+            ))
+            let routeUnitX = abs((secondPoint.x - firstPoint.x) / currentGap)
+            let routeUnitY = abs((secondPoint.y - firstPoint.y) / currentGap)
+            let availableHorizontalSpan = max(
+                usableBounds.width - GlobeProfileAnnotationView.canvasSize.width,
+                0
+            )
+            let availableVerticalSpan = max(
+                usableBounds.height - GlobeProfileAnnotationView.canvasSize.height,
+                0
+            )
+            let horizontalGapLimit = routeUnitX > 0.001
+                ? availableHorizontalSpan / routeUnitX
+                : CGFloat.greatestFiniteMagnitude
+            let verticalGapLimit = routeUnitY > 0.001
+                ? availableVerticalSpan / routeUnitY
+                : CGFloat.greatestFiniteMagnitude
+            let safeGapLimit = min(horizontalGapLimit, verticalGapLimit) * 0.9
+            let zoomScale = min(requestedGap, safeGapLimit) / currentGap
+            guard zoomScale > 1 else { return }
+
+            let camera = mapView.camera
+            camera.centerCoordinateDistance /= zoomScale
+            camera.centerCoordinate = route.midpointCoordinate
+            camera.pitch = 0
+            commitNativeMarkersForNearbyFraming(in: mapView)
+            mapView.setCamera(
+                camera,
+                animated: !UIAccessibility.isReduceMotionEnabled
+            )
+        }
+
+        /// 이전 Route에서 뒷면/숨김이었던 profile도 새 근거리 확대가 시작되기
+        /// 직전에 실제 도시 annotation으로 확정해, 사람 없이 지도만 확대되지 않게 한다.
+        private func commitNativeMarkersForNearbyFraming(in mapView: MKMapView) {
+            for id in [GlobeProfileMarker.ID.mine, .partner] {
+                guard let annotation = annotationsByID[id],
+                      let indicator = backsideIndicatorsByID[id] else { continue }
+                nativeFadeInMarkerIDs.remove(id)
+                setMarkerRepresentation(
+                    .native,
+                    for: id,
+                    nativeView: mapView.view(for: annotation)
+                        as? GlobeProfileAnnotationView,
+                    indicator: indicator,
+                    fadesIn: false
+                )
+            }
+        }
+
+        private func cancelNearbyFraming() {
+            nearbyFramingDisplayLink?.invalidate()
+            nearbyFramingDisplayLink = nil
+            nearbyFramingFramesRemaining = 0
+        }
+
+        private func hasActiveMapGesture(in view: UIView) -> Bool {
+            if view.gestureRecognizers?.contains(where: {
+                $0.state == .began || $0.state == .changed
+            }) == true {
+                return true
+            }
+            return view.subviews.contains(where: hasActiveMapGesture(in:))
         }
 
         func mapView(
@@ -1326,6 +1548,9 @@ struct GlobeMapView: UIViewRepresentable {
             profileView.configure(with: annotation.marker)
             profileView.setBacksidePresentation(false)
             profileView.setSide(markerOrder.wrappedValue.side(for: annotation.id))
+            profileView.setCoordinateOffsetX(
+                coincidentCoordinateOffsetX(for: annotation.id)
+            )
             profileView.onActivate = { [weak self, weak mapView] in
                 guard let self, let mapView else { return }
                 self.activate(annotation, in: mapView)
@@ -1415,6 +1640,7 @@ struct GlobeMapView: UIViewRepresentable {
                     .setSide(order.side(for: id))
                 backsideIndicatorsByID[id]?.setSide(order.side(for: id))
             }
+            applyCoincidentMarkerOffsets(in: mapView)
         }
 
         private func activate(
@@ -1504,6 +1730,9 @@ struct GlobeMapView: UIViewRepresentable {
             _ mapView: MKMapView,
             regionWillChangeAnimated animated: Bool
         ) {
+            if hasActiveMapGesture(in: mapView) {
+                cancelNearbyFraming()
+            }
             beginUserCameraMotion()
             selection.wrappedValue = nil
             backsideIndicatorsByID.values.forEach { $0.setSelected(false) }
@@ -1564,6 +1793,9 @@ private final class RouteHeartAnnotation: NSObject, MKAnnotation {
 
 private final class RouteHeartAnnotationView: MKAnnotationView {
     static let reuseIdentifier = "RouteHeartAnnotationView"
+    static let canvasSize = CGSize(width: 32, height: 32)
+    static let maximumHeartbeatScale: CGFloat = 1.24
+    static let maximumVisualRadius = canvasSize.width / 2 * maximumHeartbeatScale
 
     private let heartLabel = UILabel()
     private var lifecycleObservers: [NSObjectProtocol] = []
@@ -1572,11 +1804,12 @@ private final class RouteHeartAnnotationView: MKAnnotationView {
     override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
 
-        bounds = CGRect(x: 0, y: 0, width: 32, height: 32)
+        bounds = CGRect(origin: .zero, size: Self.canvasSize)
         backgroundColor = .clear
         isOpaque = false
         canShowCallout = false
         displayPriority = .required
+        collisionMode = .none
         isAccessibilityElement = true
         accessibilityLabel = "두 사람을 잇는 하트"
 
@@ -1652,7 +1885,7 @@ private final class RouteHeartAnnotationView: MKAnnotationView {
               heartLabel.layer.animation(forKey: "singleHeartbeat") == nil else { return }
 
         let heartbeat = CAKeyframeAnimation(keyPath: "transform.scale")
-        heartbeat.values = [1, 1.24, 1, 1]
+        heartbeat.values = [1, Self.maximumHeartbeatScale, 1, 1]
         heartbeat.keyTimes = [0, 0.12, 0.26, 1]
         heartbeat.duration = 1.45
         heartbeat.repeatCount = .infinity
@@ -1971,6 +2204,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         accessibilityLabel = nil
         accessibilityValue = nil
         setBacksidePresentation(false)
+        setCoordinateOffsetX(0)
         accessibilityTraits = [.button]
         tapFeedback.prepare()
     }
@@ -1979,6 +2213,15 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         guard markerSide != side else { return }
         markerSide = side
         setNeedsLayout()
+    }
+
+    func setCoordinateOffsetX(_ horizontalOffset: CGFloat) {
+        let nextOffset = CGPoint(
+            x: horizontalOffset,
+            y: Self.avatarCenterOffset.y
+        )
+        guard centerOffset != nextOffset else { return }
+        centerOffset = nextOffset
     }
 
     func setBacksidePresentation(_ isBacksidePresentation: Bool) {

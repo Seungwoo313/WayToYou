@@ -4,15 +4,15 @@
 
 작업 폴더: `/Users/seungwoo/Desktop/WayToYou`
 
-브랜치: `codex/minor-change`
+브랜치: `feature/nearby-view`
 
-최신 기능 병합 기준: `2c2fd0c Merge pull request #3 from Seungwoo313/codex/product-plan-mvp`
+최신 기능 병합 기준: `d979b84 Merge pull request #4 from Seungwoo313/codex/minor-change`
 
 이 문서는 다음 채팅에서 현재 작업을 다시 조사하지 않고 곧바로 이어가기 위한 기준 문서다. 다음 작업을 시작할 때 이 문서와 `git status`, 최근 `git log`를 먼저 확인한다.
 
 ## 1. 지금 바로 이어서 할 일
 
-> **2026-08-13 업데이트**: 두 기능 브랜치를 PR #2, #3으로 `main`에 병합하고 원격과 동기화했다. Device Presence와 수동 QA, 프로필 도시·기본 배송 공항 분리, 홈 도시 시계·날씨·설정, Route Heart 설정, 프로그래밍 가능한 DEBUG 도시 테스트, 준대척 카메라 fallback까지 반영됐다.
+> **2026-08-13 업데이트**: PR #4까지 `main`에 병합한 뒤 `feature/nearby-view`에서 근거리 도시 카메라를 구현했다. Device Presence와 수동 QA, 프로필 도시·기본 배송 공항 분리, 홈 도시 시계·날씨·설정, Route Heart 설정, 프로그래밍 가능한 DEBUG 도시 테스트, 준대척 카메라 fallback까지 기존 기준으로 유지한다.
 
 도시 중심 프로필 마커, 탭 선택 애니메이션·햅틱, Signal 스티커, 신규 Signal 수신 토스트는 `8367f0a`까지 완료됐다. 그 뒤 도시 Route, Device Presence, 프로필 도시·기본 공항 분리, 홈 시계·날씨·설정과 Route Heart를 추가했고, 준대척 도시의 뒷면 Route 표현과 카메라는 `21210a9`, `3c4ffa6`, `0182240`에서 정리했다. 큰 정보 카드와 기존 도시/시간 pill은 복원하지 않는다. 현재 도시 시계·날씨는 홈 좌우의 작은 정보로 구현돼 있다.
 
@@ -115,7 +115,7 @@ Device Presence 수동 QA와 도시 Route 선, 프로필 도시·기본 배송 �
 | 프로필 성공 토스트 | 구현 완료 | 실기기 시각·VoiceOver 확인 |
 | DEBUG 시뮬레이터 계정·도시 주입 | 완료 | 설정 즉시 변경·실행 환경변수·자동 캡처 지원, 서버 실시간 동기화는 의도적으로 없음 |
 | 홈 도시 시계·날씨·설정 | 완료 | Open-Meteo 장애·오프라인 시 빈 날씨 처리 유지 |
-| MapKit 지구본 | 위성 지구본·동적 카메라·도시 프로필 마커·Signal·배터리·도시 Route·뒷면 표현·준대척 fallback 완료 | 배송 Route와 Gift annotation 미구현 |
+| MapKit 지구본 | 위성 지구본·동적 카메라·근거리 확대·도시 프로필 마커·Signal·배터리·도시 Route·뒷면 표현·준대척 fallback 완료 | 배송 Route와 Gift annotation 미구현 |
 | Device Presence·배터리 | 완료 | 두 실기기 publish·충전 전환·freshness 화면 QA 완료 |
 | Parcel/Letter/Keepsakes | 로컬 데모 흐름 존재 | 기본 공항 자동 적용·변경·Route 스냅샷·서버 전송 구현 필요 |
 | Polaroid·Voice Tape | 미착수 | Product Plan 후속 단계 |
@@ -168,6 +168,11 @@ Device Presence 수동 QA와 도시 Route 선, 프로필 도시·기본 배송 �
 - `CameraFraming.placement(in:)`의 기존 구면 중점·하단 여백 계산은 기본 경로다. 도시 간 각거리 `> 165°`와 화면상 Route 축 `< 36°`가 동시에 성립할 때만 동거리 적도 fallback 중심을 사용한다.
 - 일반 준대척 fallback은 대권 중점 쪽으로 20° 기울이고 뒷면 허용 범위를 40°로 넓힌다. 각거리 `> 175°`이며 대권 중점 위도 절댓값이 `> 70°`인 극점 특수 케이스만 Route 위로 55° 이동하고 허용 범위를 70°로 둔다.
 - 이 조건 분기는 기존에 잘 보이던 Route의 카메라를 유지하면서 Bogotá–Jakarta, Quito–Kuala Lumpur처럼 극점 인접 중점에서 과도하게 확대되거나 양 끝이 화면 밖으로 밀리던 조합만 보정하기 위한 것이다. 상수를 일반 Route 전체에 적용하지 않는다.
+- 근거리 카메라는 `CameraFraming.placement(in:)`를 수정하지 않는다. 기존 전 지구 카메라와 annotation을 먼저 커밋하고 2 display frame을 더 기다린 뒤, 두 도시가 실제 앞면·화면 안에 있으며 프로필 중심 간격이 50pt 미만이거나 중앙 Route Heart의 최대 heartbeat 크기가 프로필과 4pt 여백을 확보하지 못할 때만 현재 `centerCoordinateDistance`를 줄인다.
+- 확대 목표는 사용 가능 화면 너비의 65%, 236...248pt이며 카메라 거리는 최소 3.35배 가까이 당기고 Route의 구면 중점으로 중심을 옮긴다. 작은 화면·가로 화면에서는 Route 방향과 68×92pt 프로필 전체 캔버스를 기준으로 안전한 최대 간격을 계산해 확대를 제한한다. 어정쩡하게 잘린 지구나 화면 밖 끝점이 아니라 두 사람이 모두 보이는 확실한 지역 뷰로 끝난다. 조건을 통과하지 않으면 카메라 write가 없으므로 기존 지구본이 유지된다. 같은 좌표는 카메라 확대 대신 두 annotation을 전체 canvas 폭인 68pt 간격으로 분리한다.
+- Heart 설정을 나중에 켜도 카메라가 다시 움직이지 않도록 초기 framing에서 최대 heartbeat 공간을 항상 예약한다. `RouteHeartAnnotationView`는 MapKit collision 회피로 사라지지 않게 `.none`을 사용한다.
+- 근거리 확대는 현재 camera center, pitch 0을 유지한 MapKit 기본 `setCamera` 애니메이션이다. Reduce Motion에서는 애니메이션을 끄며, 확대 대기 중 사용자가 pan/pinch/rotate를 시작하면 pending 확대를 취소한다.
+- 검증 자료는 `artifacts/debug-city-tests/nearby-framing-comparison.md`와 `artifacts/debug-city-tests/png/nearby-*`에 있다. iPhone 17 / iOS 26.5에서 25개 거리·투영 조합의 Before / After(지역 확대 18, 지구본 유지 7), Heart를 켠 New York – Miami, 준대척 13개의 동일 입력 Before / After를 보관한다.
 
 #### 프로필 마커 앵커 변경과 이전 방식 보관
 
@@ -344,6 +349,8 @@ xcodebuild \
 `0182240`의 카메라 fallback은 코드로 주입한 준대척 문제 조합 8개와 기존 정상 조합 5개의 첫 홈 화면을 iPhone 17 시뮬레이터에서 캡처해 비교했다. 최종 Debug 시뮬레이터 검증 뒤 Release 구성으로 빌드하고 `승우의 iPhone`에 설치·실행했다. 당시 문서와 캡처 파일만 정리한 작업에서는 iOS 소스를 바꾸지 않아 추가 기기 실행을 하지 않았다.
 
 2026-08-13에는 프로필 아래 다리와 흰 위치 점을 제거하고 도시 좌표를 프로필 원 중심에 맞췄다. iPhone 17 시뮬레이터와 실기기용 빌드에 성공했고, 최종 앱을 `승우의 iPhone`에 설치·실행했다.
+
+같은 날 `feature/nearby-view`의 근거리 카메라는 iPhone 17 / iOS 26.5에서 거리·투영 조합 25개의 Before / After와 준대척 13개의 동일 입력 회귀를 캡처했다. 최종 Debug·Release 빌드에 성공했고 `승우의 iPhone`에 설치·실행한 뒤 앱 프로세스가 유지되는 것을 확인했다. 비교 자료는 `artifacts/debug-city-tests/nearby-framing-comparison.md`다.
 
 프로필 도시·기본 배송 공항 분리는 iPhone 17 시뮬레이터의 `우리` 화면에서 `서울 ↔ Paris` 도시와 `ICN ↔ CDG` 기본 배송값이 분리되어 보이는 것을 확인했다. 같은 변경분을 `승우의 iPhone`과 iPhone 14에 빌드·설치·실행했고 두 기기에서 앱 프로세스가 유지되는 것도 확인했다.
 
