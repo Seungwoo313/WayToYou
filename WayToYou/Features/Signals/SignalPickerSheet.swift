@@ -247,14 +247,13 @@ private struct LabelStrip: View {
         }
     }
 
+    /// 역 안내판처럼 검은 판 위에서 글자 자체가 빛난다. 칠한 칩을 두면 종이 라벨로 보인다.
     private func tag(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.system(size: 8, weight: .black, design: .monospaced))
-            .tracking(1.2)
-            .foregroundStyle(Keypad.glass)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2.5)
-            .background(Keypad.ledDim, in: RoundedRectangle(cornerRadius: 2.5, style: .continuous))
+            .font(.system(size: 11, weight: .bold, design: .monospaced))
+            .tracking(1.4)
+            .foregroundStyle(Keypad.led)
+            .shadow(color: Keypad.led.opacity(0.55), radius: 4)
             .lineLimit(1)
     }
 }
@@ -568,10 +567,10 @@ private enum Keypad {
     static let digitWidth: CGFloat = 25
     static let digitHeight: CGFloat = 42
 
-    static let led = Color(red: 0.25, green: 1.00, blue: 0.52)
-    static let ledDim = Color(red: 0.11, green: 0.72, blue: 0.35)
-    static let ledOff = Color(red: 0.035, green: 0.16, blue: 0.08)
-    static let glass = Color(red: 0.030, green: 0.055, blue: 0.040)
+    static let led = Color(red: 1.00, green: 0.68, blue: 0.13)
+    static let ledDim = Color(red: 0.90, green: 0.55, blue: 0.06)
+    static let ledOff = Color(red: 0.20, green: 0.105, blue: 0.012)
+    static let glass = Color(red: 0.045, green: 0.038, blue: 0.030)
     static let well = Color(red: 0.700, green: 0.688, blue: 0.660)
     static let gearWell = Color(red: 0.760, green: 0.748, blue: 0.720)
     static let engraved = Color(red: 0.38, green: 0.37, blue: 0.35)
