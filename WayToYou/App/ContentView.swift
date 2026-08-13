@@ -18,6 +18,7 @@ struct ContentView: View {
     @State private var signalToast: SignalEvent?
     @State private var signalToastDismissTask: Task<Void, Never>?
     @State private var selectedGlobeMarker: GlobeMarkerSelection?
+    @State private var launchHoldElapsed = false
     @State private var globeMarkerOrder = GlobeMarkerOrder.mineOnLeft
     @State private var weatherByCityID: [String: CurrentCityWeather] = [:]
     @State private var batteryMonitor = DeviceBatteryMonitor()
@@ -61,6 +62,13 @@ struct ContentView: View {
     var body: some View {
         appContent
             .preferredColorScheme(.dark)
+            .animation(.easeInOut(duration: 0.3), value: isPreparingSession)
+            // 세션 복원이 순식간에 끝나면 로고를 알아보기도 전에 화면이 넘어간다.
+            // 하트가 한 번 다 밝아질 때까지는 붙잡아둔다.
+            .task {
+                try? await Task.sleep(for: LaunchView.brightenDuration)
+                launchHoldElapsed = true
+            }
             .task {
                 guard !isDebugSession else { return }
                 await backend.restoreSession()
@@ -123,10 +131,10 @@ struct ContentView: View {
     private var appContent: some View {
         if isDebugSession {
             connectedApp
+        } else if isPreparingSession {
+            LaunchView().transition(.opacity)
         } else if backend.authenticatedUserID == nil {
             AppleSignInView(backend: backend)
-        } else if !store.backendIsReady {
-            connectionLoading
         } else if store.isConnected {
             connectedApp
         } else {
@@ -137,16 +145,17 @@ struct ContentView: View {
         }
     }
 
-    private var connectionLoading: some View {
-        ZStack {
-            Palette.spaceDeep.ignoresSafeArea()
-            VStack(spacing: Metric.m) {
-                ProgressView()
-                    .tint(Palette.me)
-                Text("연결 상태를 확인하고 있어요")
-                    .font(.rounded(.subheadline, .medium))
-                    .foregroundStyle(Palette.textSecondary)
-            }
+    /// 저장된 로그인을 복원하는 동안과, 그 뒤 연결 정보를 받아오는 동안.
+    /// 두 단계를 한 조건으로 묶어야 그 사이에 로그인 화면이 한 번 스쳐 지나가지 않는다.
+    /// `.signingIn`은 여기서 제외한다. 그건 사람이 버튼을 누른 뒤라 로그인 화면에서 답해야 한다.
+    private var isPreparingSession: Bool {
+        guard launchHoldElapsed else { return true }
+
+        switch backend.state {
+        case .idle, .restoring:
+            return true
+        default:
+            return backend.authenticatedUserID != nil && !store.backendIsReady
         }
     }
 

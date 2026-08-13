@@ -4,8 +4,10 @@ import SwiftUI
 struct AppleSignInView: View {
     @Bindable var backend: SupabaseSessionController
 
+    /// 세션 복원(`.restoring`)은 이 화면에 오기 전에 LaunchView가 맡는다.
+    /// 여기서 기다리게 되는 건 사람이 직접 버튼을 누른 뒤뿐이다.
     private var isBusy: Bool {
-        backend.state == .restoring || backend.state == .signingIn
+        backend.state == .signingIn
     }
 
     var body: some View {
@@ -13,69 +15,29 @@ struct AppleSignInView: View {
             Palette.spaceDeep.ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: 0) {
-                brandMark
+                BrandMark()
                     .padding(.top, 56)
 
-                Spacer(minLength: 72)
+                Spacer(minLength: 32)
 
-                VStack(alignment: .leading, spacing: Metric.l) {
-                    Text("멀리 있어도,\n같은 곳을 바라보도록")
-                        .font(.system(size: 36, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Palette.textPrimary)
-                        .tracking(-1.1)
-                        .fixedSize(horizontal: false, vertical: true)
+                headline
 
-                    Text("두 사람의 시간과 마음을 하나의 지구 위에 이어보세요.")
-                        .font(.rounded(.body))
-                        .foregroundStyle(Palette.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Spacer(minLength: 40)
 
-                Spacer(minLength: 88)
-
-                VStack(spacing: Metric.m) {
+                VStack(spacing: Metric.l) {
                     if isBusy {
                         HStack(spacing: Metric.s) {
                             ProgressView()
                                 .controlSize(.small)
                                 .tint(Palette.textSecondary)
-                            Text(backend.state == .restoring ? "계정을 확인하고 있어요" : "안전하게 연결하고 있어요")
+                            Text("안전하게 연결하고 있어요")
                                 .font(.rounded(.footnote, .medium))
                                 .foregroundStyle(Palette.textSecondary)
                         }
-                        .frame(height: 56)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 116)
                     } else {
-                        VStack(spacing: Metric.m) {
-                            SignInWithAppleButton(.continue) { request in
-                                backend.prepareAppleRequest(request)
-                            } onCompletion: { result in
-                                Task { await backend.completeAppleSignIn(result) }
-                            }
-                            .signInWithAppleButtonStyle(.white)
-                            .frame(height: 56)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                            Button {
-                                Task { await backend.signInWithGoogle() }
-                            } label: {
-                                Text("Google로 계속하기")
-                                    .font(.system(.body, design: .rounded).weight(.semibold))
-                                    .foregroundStyle(Palette.textPrimary)
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 56)
-                                    .background(
-                                        Palette.surface,
-                                        in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    )
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                            .strokeBorder(Palette.hairline, lineWidth: 0.5)
-                                    }
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityHint("Google 계정 선택 화면을 엽니다")
-                        }
-                        .disabled(!backend.isConfigured)
+                        signInOptions
                     }
 
                     if let message = backend.userMessage {
@@ -87,7 +49,7 @@ struct AppleSignInView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    Text("로그인하면 서비스 이용을 위한 최소한의 계정 식별 정보만 사용합니다.")
+                    Text("로그인에 필요한 최소한의 계정 정보만 사용합니다.")
                         .font(.rounded(.caption2))
                         .foregroundStyle(Palette.textTertiary)
                         .multilineTextAlignment(.center)
@@ -101,28 +63,61 @@ struct AppleSignInView: View {
         }
     }
 
-    private var brandMark: some View {
-        HStack(spacing: Metric.m) {
-            ZStack {
-                Circle()
-                    .strokeBorder(Palette.hairline, lineWidth: 1)
-                    .frame(width: 36, height: 36)
-
-                Circle()
-                    .fill(Palette.me)
-                    .frame(width: 6, height: 6)
-                    .offset(x: -7, y: 4)
-
-                Circle()
-                    .fill(Palette.you)
-                    .frame(width: 6, height: 6)
-                    .offset(x: 7, y: -4)
-            }
-
-            Text("Way to You")
-                .font(.rounded(.headline, .semibold))
+    /// 네 줄로 끊어서 `means nothing`과 `means everything`이 세로로 겹치게 둔다.
+    /// 이 문장의 힘은 그 대구에서 나오니까, 줄바꿈이 곧 뜻이다.
+    /// Text끼리 더하면 그룹이 달라도 행간이 흐트러지지 않는다.
+    private var headline: some View {
+        (
+            Text("Distance\nmeans nothing\n")
+                .foregroundStyle(Palette.textSecondary)
+            + Text("when someone\nmeans everything")
                 .foregroundStyle(Palette.textPrimary)
-        }
-        .accessibilityElement(children: .combine)
+        )
+        .font(.system(size: 34, weight: .semibold))
+        .tracking(-0.6)
+        .lineSpacing(1)
+        .fixedSize(horizontal: false, vertical: true)
+        .minimumScaleFactor(0.8)
+        .accessibilityLabel("Distance means nothing when someone means everything")
     }
+
+    /// 두 버튼을 같은 알약 모양·같은 높이로 맞춘다.
+    /// Apple 버튼은 시스템이 그리므로, Google 쪽을 거기에 맞추는 방향으로 짠다.
+    private var signInOptions: some View {
+        VStack(spacing: Metric.m) {
+            SignInWithAppleButton(.continue) { request in
+                backend.prepareAppleRequest(request)
+            } onCompletion: { result in
+                Task { await backend.completeAppleSignIn(result) }
+            }
+            .signInWithAppleButtonStyle(.white)
+            .frame(height: Self.buttonHeight)
+            .clipShape(Capsule())
+
+            Button {
+                Task { await backend.signInWithGoogle() }
+            } label: {
+                HStack(spacing: Metric.s) {
+                    Image("GoogleMark")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 21, height: 21)
+
+                    Text("Google로 계속하기")
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(.black)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: Self.buttonHeight)
+                .background(.white, in: Capsule())
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Google로 계속하기")
+            .accessibilityHint("Google 계정 선택 화면을 엽니다")
+        }
+        .disabled(!backend.isConfigured)
+    }
+
+    private static let buttonHeight: CGFloat = 52
 }
