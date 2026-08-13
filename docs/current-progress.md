@@ -3,7 +3,9 @@
 작성일: 2026-08-13
 브랜치: `feature/globe-animation`
 최신 기능 병합 기준: `d979b84` (`codex/minor-change` PR #4 병합 완료)
-현재 작업 HEAD: `fd8c114` (`feature/globe-animation`)
+현재 작업 HEAD: `0cac50f` (`feature/globe-animation`, `main` 미병합)
+
+이 브랜치의 남은 확인 항목은 `docs/next-session-handoff.md`의 `9-1`에 정리했다.
 
 다음 채팅에서 이어갈 구체적인 구현 범위와 최신 결정은 `docs/next-session-handoff.md`를 우선한다.
 
@@ -115,6 +117,7 @@
 - 하강 중에는 마커 분류를 얼린다. 최대 257개 투영 probe의 화면 좌표가 매 프레임 바뀌어, 한 프레임만 잘못 읽어도 보이는 도시가 뒷면으로 판정되어 아바타가 사라진다. 프로필은 실제 annotation이라 MapKit이 재투영한다.
 - 마커 다리는 순간 전환이 아니라 하강의 5%...42% 구간에서 분수값으로 접힌다. 점은 도시 좌표에 고정된 채 줄기만 짧아지고 아바타가 그 위로 내려앉는다. 기존 42pt 앵커 점프는 원래 있었으나 빠른 애니메이션에 가려져 있었다.
 - Reduce Motion에서는 하강 없이 같은 최종 카메라를 적용한다. 대기 중이나 하강 중에 지도 제스처가 시작되면 카메라를 즉시 사용자에게 넘기고, 도시 조합이 바뀌면 하강을 취소한다.
+- 두 프로필의 좌우 순서는 Route당 한 번, 하강 전 전 지구 화면에서 정하며 상단 시계 배치와 프로필 옆 Signal 이모지 위치를 함께 결정한다. pitch가 0이고 heading을 대입하는 곳이 없어 화면 좌우 순서는 카메라 거리와 무관하므로, 전 지구에서 잰 몇 pt 차이도 확대 후와 같은 답이다. 두 마커가 사실상 같은 지점일 때만 현재 값을 유지한다.
 - iPhone 17 / iOS 26.5에서 0...19,614km의 거리·투영 조합 25개를 동일 입력 Before / After로 캡처했다. 18개는 확실한 지역 뷰로 확대되고 7개는 기존 지구본을 유지했다. New York – Miami는 Route Heart를 실제로 켠 화면에서도 충돌하지 않는 것을 별도로 확인했다. 준대척 문제 8개와 정상 5개도 변경 전·후 동일 입력으로 재검증했다. 비교표는 `artifacts/debug-city-tests/nearby-framing-comparison.md`에 있다.
 
 관련 커밋:
@@ -129,6 +132,7 @@
 - `62b2df9 Add adaptive nearby city framing`
 - `a6d5be9 Restore globe marker legs by framing mode`
 - `fd8c114 Dive into the globe instead of snapping to the region`
+- `0cac50f Stop discarding a valid marker order on the full globe`
 
 ### 홈 도시 정보·설정·Route Heart — 구현 완료
 
@@ -324,4 +328,4 @@ supabase db push --dry-run
 - 8개 Supabase migration은 원격과 일치하고 dry-run 기준 추가 적용 항목이 없다.
 - 두 실기기 실행 후 원격 Device Presence 행 2개를 확인했고 충전 전환·freshness 수동 QA도 완료했다.
 - 앱 인증 토큰은 iOS Keychain을 사용하며, Keychain은 Supabase DB가 아니라 기기 내부의 보호된 인증 저장소다.
-- 최신 기능 병합 기준은 `d979b84`이고, 현재 `feature/globe-animation`의 작업 HEAD는 `fd8c114`다.
+- 최신 기능 병합 기준은 `d979b84`이고, 현재 `feature/globe-animation`의 작업 HEAD는 `0cac50f`다.
