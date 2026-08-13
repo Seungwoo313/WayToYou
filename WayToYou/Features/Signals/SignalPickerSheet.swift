@@ -467,7 +467,7 @@ private struct KeycapFace: View {
         shape
             .fill(Keypad.capFill)
             .overlay { dish }
-            .overlay { shape.strokeBorder(Keypad.topLightEdge, lineWidth: 1) }
+            .overlay { shape.strokeBorder(Keypad.capEdge, lineWidth: 1) }
             .overlay { Text(emoji).font(.system(size: Keypad.emojiSize)) }
             .overlay(alignment: .topTrailing) { activeLamp }
             .overlay { PlasticGrain().clipShape(shape) }
@@ -489,7 +489,7 @@ private struct KeycapFace: View {
         } else if isEditing {
             Image(systemName: "pencil")
                 .font(.system(size: 8, weight: .black))
-                .foregroundStyle(Keypad.engravedFaint)
+                .foregroundStyle(.white.opacity(0.55))
                 .padding(5)
         }
     }
@@ -564,7 +564,7 @@ private enum Keypad {
     static let keyGap: CGFloat = 8
     static let keyRadius: CGFloat = 12
     static let keyDepth: CGFloat = 7
-    static let emojiSize: CGFloat = 30
+    static let emojiSize: CGFloat = 38
     static let digitWidth: CGFloat = 25
     static let digitHeight: CGFloat = 42
 
@@ -584,13 +584,20 @@ private enum Keypad {
     )
 
     static let capFill = LinearGradient(
-        colors: [Color(red: 0.985, green: 0.980, blue: 0.968), Color(red: 0.895, green: 0.885, blue: 0.862)],
+        colors: [Color(red: 0.255, green: 0.250, blue: 0.245), Color(red: 0.170, green: 0.166, blue: 0.162)],
         startPoint: .top,
         endPoint: .bottom
     )
 
     static let skirtFill = LinearGradient(
-        colors: [Color(red: 0.775, green: 0.762, blue: 0.735), Color(red: 0.620, green: 0.608, blue: 0.582)],
+        colors: [Color(red: 0.130, green: 0.127, blue: 0.124), Color(red: 0.075, green: 0.073, blue: 0.070)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+
+    /// 어두운 키캡에는 흰 하이라이트를 몸통만큼 세게 주면 플라스틱이 아니라 유리처럼 보인다.
+    static let capEdge = LinearGradient(
+        colors: [.white.opacity(0.28), .black.opacity(0.45)],
         startPoint: .top,
         endPoint: .bottom
     )
