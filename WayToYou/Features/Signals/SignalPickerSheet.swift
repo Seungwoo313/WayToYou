@@ -14,6 +14,8 @@ struct SignalPickerSheet: View {
 
     let keys: [SignalKey]
     let selectedSignal: CoupleSignal?
+    /// 기계는 항상 트리에 있으므로 닫혔다는 사실을 직접 받아 고른 키를 되돌린다.
+    let isPresented: Bool
     let partnerName: String
     let partnerCityName: String
     /// 초마다 바뀌는 `Date`를 그대로 받으면, 여는 프레임에 값이 달라져 있을 때
@@ -30,18 +32,36 @@ struct SignalPickerSheet: View {
     @State private var draftEmoji = ""
     @State private var draftLabel = ""
     @State private var dragOffset: CGFloat = 0
+    /// 키를 누르면 눌리기만 하고, 보내는 것은 엔터가 맡는다.
+    @State private var stagedSignal: CoupleSignal?
+
+    /// 지금 램프가 켜져 있어야 하는 신호. 고른 것이 없으면 마지막으로 보낸 것.
+    private var activeSignal: CoupleSignal? {
+        stagedSignal ?? selectedSignal
+    }
 
     var body: some View {
         machine
             .offset(y: dragOffset)
             .gesture(dismissDrag)
+            .onChange(of: isPresented) { _, presented in
+                if !presented {
+                    stagedSignal = nil
+                    isEditingKeys = false
+                }
+            }
             .alert("키캡 바꾸기", isPresented: isPresentingEditor) {
                 TextField("이모지", text: $draftEmoji)
+                    .onChange(of: draftEmoji) { _, typed in
+                        // 글자나 숫자를 눌러도 키캡에 올라가지 않게 이모지 하나만 남긴다.
+                        draftEmoji = CoupleSignal.keycap(from: typed)?.emoji ?? ""
+                    }
                 TextField("설명 \(SignalKey.labelLimit)자 이내", text: $draftLabel)
+                    .onChange(of: draftLabel) { _, typed in
+                        draftLabel = String(typed.prefix(SignalKey.labelLimit))
+                    }
                 Button("취소", role: .cancel) { editingIndex = nil }
                 Button("저장") { commitEditing() }
-            } message: {
-                Text("설명은 기계에 새기지 않고 나중에 알림에만 써요")
             }
     }
 
@@ -52,17 +72,18 @@ struct SignalPickerSheet: View {
             DisplayPanel(
                 value: distanceDigits,
                 unit: "KM",
-                topLeft: isEditingKeys ? "EDIT" : partnerName,
-                topRight: isEditingKeys ? "TAP KEY" : partnerCityName,
-                bottomLeft: isEditingKeys ? "EMOJI" : timeOffset,
-                bottomRight: isEditingKeys ? "+ LABEL" : partnerClock
+                title: isEditingKeys ? "EDIT KEYS" : "TO \(partnerName)",
+                bottomLeft: isEditingKeys ? "EMOJI" : partnerClock,
+                bottomRight: isEditingKeys ? "+ LABEL" : partnerCityName
             )
 
             KeyWell(
                 keys: keys,
-                selectedSignal: selectedSignal,
+                activeSignal: activeSignal,
                 isEditing: isEditingKeys,
-                onSelect: onSelect,
+                canSend: stagedSignal != nil,
+                onStage: { stagedSignal = $0 },
+                onSend: send,
                 onEdit: beginEditing
             )
         }
@@ -109,6 +130,16 @@ struct SignalPickerSheet: View {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             isEditingKeys.toggle()
         }
+    }
+
+    /// 엔터를 눌러야 실제로 나간다. 고른 것이 없으면 그냥 내려간다.
+    private func send() {
+        guard let stagedSignal else {
+            onDismiss()
+            return
+        }
+        self.stagedSignal = nil
+        onSelect(stagedSignal)
     }
 
     private func beginEditing(_ index: Int) {
@@ -233,15 +264,11 @@ private struct GearButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "gearshape.fill")
-                .font(.system(size: 12, weight: .bold))
+                .font(.system(size: 19, weight: .semibold))
                 .foregroundStyle(isOn ? Keypad.led : Keypad.engraved)
                 .rotationEffect(.degrees(isOn ? 45 : 0))
-                .frame(width: 24, height: 24)
-                .background {
-                    Circle()
-                        .fill(Keypad.gearWell)
-                        .innerShadow(radius: 12, color: .black.opacity(0.45), width: 3)
-                }
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
         }
         .buttonStyle(PressableCard())
         .accessibilityLabel("키캡 설정")
@@ -255,8 +282,7 @@ private struct GearButton: View {
 private struct DisplayPanel: View {
     let value: String
     let unit: String
-    let topLeft: String
-    let topRight: String
+    let title: String
     let bottomLeft: String
     let bottomRight: String
 
@@ -264,7 +290,7 @@ private struct DisplayPanel: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            LabelStrip(left: topLeft, right: topRight)
+            LabelStrip(left: title, right: "")
             readout
             LabelStrip(left: bottomLeft, right: bottomRight)
         }
@@ -310,7 +336,9 @@ private struct LabelStrip: View {
         HStack(spacing: 5) {
             tag(left)
             Spacer(minLength: 8)
-            tag(right)
+            if !right.isEmpty {
+                tag(right)
+            }
         }
     }
 
@@ -457,21 +485,29 @@ private enum SegmentGeometry {
 /// 키가 판 위에 얹힌 게 아니라 우물에 박혀 있어야 넘패드로 읽힌다.
 private struct KeyWell: View {
     let keys: [SignalKey]
-    let selectedSignal: CoupleSignal?
+    let activeSignal: CoupleSignal?
     let isEditing: Bool
-    let onSelect: (CoupleSignal) -> Void
+    let canSend: Bool
+    let onStage: (CoupleSignal) -> Void
+    let onSend: () -> Void
     let onEdit: (Int) -> Void
 
     private let shape = RoundedRectangle(cornerRadius: Keypad.wellRadius, style: .continuous)
 
-    /// 아홉 개뿐이라 lazy로 둘 이유가 없다. `LazyVGrid`는 키캡을 몸통과 따로
+    /// 아홉 자리뿐이라 lazy로 둘 이유가 없다. `LazyVGrid`는 키캡을 몸통과 따로
     /// 나타나게 만들어서 기계가 두 번에 나눠 올라오는 것처럼 보인다.
+    /// 마지막 자리는 신호가 아니라 보내기 키다.
     var body: some View {
         VStack(spacing: Keypad.keyGap) {
             ForEach(0..<3, id: \.self) { row in
                 HStack(spacing: Keypad.keyGap) {
                     ForEach(0..<3, id: \.self) { column in
-                        keycap(at: row * 3 + column)
+                        let index = row * 3 + column
+                        if index == SignalKey.count {
+                            enterKey
+                        } else {
+                            keycap(at: index)
+                        }
                     }
                 }
             }
@@ -493,12 +529,13 @@ private struct KeyWell: View {
                 if isEditing {
                     onEdit(index)
                 } else {
-                    onSelect(key.signal)
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    onStage(key.signal)
                 }
             } label: {
                 KeycapFace(
                     emoji: key.emoji,
-                    isSelected: !isEditing && key.signal == selectedSignal,
+                    isSelected: !isEditing && key.signal == activeSignal,
                     isEditing: isEditing
                 )
             }
@@ -508,9 +545,19 @@ private struct KeyWell: View {
                 onEdit(index)
             }
             .accessibilityLabel(key.label.isEmpty ? key.signal.title : key.label)
-            .accessibilityValue(key.signal == selectedSignal ? "현재 내 Signal" : "")
+            .accessibilityValue(key.signal == activeSignal ? "선택됨" : "")
             .accessibilityHint("길게 누르면 이 키를 바꿔요")
         }
+    }
+
+    /// 누른 신호는 눌린 채로 남고, 실제로 나가는 것은 이 키를 눌렀을 때다.
+    private var enterKey: some View {
+        Button(action: onSend) {
+            EnterKeyFace(isArmed: canSend)
+        }
+        .buttonStyle(KeycapPress())
+        .accessibilityLabel("보내기")
+        .accessibilityHint(canSend ? "고른 Signal을 보내요" : "기계를 닫아요")
     }
 }
 
@@ -590,10 +637,46 @@ private struct KeycapFace: View {
                 .padding(6)
         } else if isEditing {
             Image(systemName: "pencil")
-                .font(.system(size: 8, weight: .black))
-                .foregroundStyle(.white.opacity(0.55))
-                .padding(5)
+                .font(.system(size: 13, weight: .black))
+                .foregroundStyle(Keypad.led)
+                .padding(6)
         }
+    }
+}
+
+/// 신호 키와 같은 몸이지만 색이 다르다. 레퍼런스의 회색 기능키 자리다.
+private struct EnterKeyFace: View {
+    let isArmed: Bool
+    @Environment(\.keycapIsPressed) private var isPressed
+
+    private let shape = RoundedRectangle(cornerRadius: Keypad.keyRadius - 2, style: .continuous)
+
+    private var sink: CGFloat {
+        isPressed ? Keypad.keyDepth - 1.5 : 0
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            RoundedRectangle(cornerRadius: Keypad.keyRadius, style: .continuous)
+                .fill(Keypad.skirtFill)
+                .shadow(color: .black.opacity(0.55), radius: 4, y: 3)
+
+            shape
+                .fill(isArmed ? Keypad.enterArmedFill : Keypad.enterFill)
+                .overlay { shape.fill(Keypad.capDish) }
+                .overlay { shape.strokeBorder(Keypad.capEdge, lineWidth: 1.2) }
+                .overlay {
+                    Image(systemName: "return")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundStyle(isArmed ? Keypad.glass : .white.opacity(0.5))
+                }
+                .padding(.horizontal, Keypad.keyInset)
+                .padding(.top, sink)
+                .padding(.bottom, Keypad.keyDepth - sink)
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .animation(.spring(response: 0.16, dampingFraction: 0.72), value: isPressed)
+        .animation(.easeOut(duration: 0.16), value: isArmed)
     }
 }
 
@@ -689,7 +772,18 @@ private enum Keypad {
     static let ledDim = Color(red: 0.90, green: 0.55, blue: 0.06)
     static let ledOff = Color(red: 0.20, green: 0.105, blue: 0.012)
     static let glass = Color(red: 0.045, green: 0.038, blue: 0.030)
-    static let gearWell = Color(red: 0.760, green: 0.748, blue: 0.720)
+    /// 보낼 준비가 되면 LED 색으로 물든다.
+    static let enterArmedFill = LinearGradient(
+        colors: [Color(red: 1.00, green: 0.72, blue: 0.20), Color(red: 0.88, green: 0.52, blue: 0.05)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+
+    static let enterFill = LinearGradient(
+        colors: [Color(red: 0.400, green: 0.392, blue: 0.382), Color(red: 0.290, green: 0.284, blue: 0.276)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
     static let engraved = Color(red: 0.38, green: 0.37, blue: 0.35)
     static let engravedFaint = Color(red: 0.55, green: 0.54, blue: 0.52)
 

@@ -130,7 +130,8 @@ struct SignalKey: Identifiable, Hashable, Codable {
         String(label.trimmingCharacters(in: .whitespacesAndNewlines).prefix(labelLimit))
     }
 
-    /// 3×3 키패드의 출고 상태. 사용자가 언제든 바꾼다.
+    /// 키패드의 출고 상태. 사용자가 언제든 바꾼다.
+    /// 3×3 중 마지막 한 자리는 보내기 키라 신호는 여덟 개다.
     static let defaults: [SignalKey] = [
         SignalKey(signal: .sleeping, label: "자는 중"),
         SignalKey(signal: .focusing, label: "집중 중"),
@@ -139,11 +140,10 @@ struct SignalKey: Identifiable, Hashable, Codable {
         SignalKey(signal: .resting, label: "쉬는 중"),
         SignalKey(signal: CoupleSignal("🍚"), label: "밥 먹는 중"),
         SignalKey(signal: CoupleSignal("🏃"), label: "운동 중"),
-        SignalKey(signal: CoupleSignal("🚌"), label: "이동 중"),
-        SignalKey(signal: CoupleSignal("🎧"), label: "음악 듣는 중")
+        SignalKey(signal: CoupleSignal("🚌"), label: "이동 중")
     ]
 
-    static let count = 9
+    static let count = 8
 }
 
 private extension Character {

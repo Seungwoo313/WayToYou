@@ -359,6 +359,7 @@ struct ContentView: View {
         SignalPickerSheet(
             keys: store.signalKeys,
             selectedSignal: store.latestSignal(.outgoing, at: now)?.signal,
+            isPresented: isSignalOpen,
             partnerName: store.partnerProfile?.displayName ?? "상대",
             partnerCityName: store.partnerCity.name,
             partnerClock: SignalPickerSheet.clock(in: store.partnerCity.timeZone, at: now),
