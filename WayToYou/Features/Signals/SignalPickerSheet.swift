@@ -242,9 +242,7 @@ private struct LabelStrip: View {
     var body: some View {
         HStack(spacing: 5) {
             tag(left)
-            Capsule(style: .continuous)
-                .fill(Keypad.ledDim)
-                .frame(height: 6)
+            Spacer(minLength: 8)
             tag(right)
         }
     }
