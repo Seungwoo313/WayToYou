@@ -162,17 +162,22 @@ private struct ChassisSurface: View {
     var body: some View {
         ZStack {
             // 아래로 삐져나온 옆면. 판때기가 아니라 상자로 보이게 하는 두께다.
+            // 그림자는 번지는 반지름보다 더 아래로 내려야 한다. 반지름이 y보다 크면
+            // 위쪽으로도 번져 나와 몸통 상단에 검은 테가 둘린다.
             outer
                 .fill(Keypad.chassisSideFill)
                 .offset(y: Keypad.chassisThickness)
-                .shadow(color: .black.opacity(0.72), radius: 28, y: 18)
+                .shadow(color: .black.opacity(0.72), radius: 18, y: 24)
 
             // 사방을 두르는 테두리. 빛을 정면으로 받아 가장 밝다.
             outer
                 .fill(Keypad.chassisRimFill)
                 .overlay { outer.strokeBorder(Keypad.rimEdge, lineWidth: 1.4) }
+                // 위 모서리가 빛을 받아 도는 면. 아래는 옆면 두께가 보이지만 위는 이것뿐이라
+                // 이게 없으면 상단만 잘려 나간 것처럼 납작해 보인다.
+                .overlay { outer.strokeBorder(Keypad.rimCrown, lineWidth: 3) }
                 .overlay { PlasticGrain().clipShape(outer) }
-                .shadow(color: .black.opacity(0.4), radius: 7, y: 4)
+                .shadow(color: .black.opacity(0.4), radius: 5, y: 7)
 
             // 테두리 안으로 한 단 내려앉은 윗판.
             inner
@@ -654,7 +659,8 @@ private enum Keypad {
     static let chassisMaxWidth: CGFloat = 330
     static let chassisRim: CGFloat = 7
     /// 텍스처로 굳힐 때 바깥 그림자가 잘리지 않도록 잡아 두는 여백.
-    static let rasterMargin: CGFloat = 34
+    /// 몸통 그림자가 아래로 `y + radius`만큼 번지므로 그보다 넉넉해야 한다.
+    static let rasterMargin: CGFloat = 48
     /// 테두리가 배경 안쪽으로 들어오므로 내용은 테두리 두께만큼 더 물러난다.
     static let chassisPadding: CGFloat = 18
     static let chassisGap: CGFloat = 13
@@ -693,6 +699,13 @@ private enum Keypad {
         colors: [.white.opacity(0.95), .white.opacity(0.2), .black.opacity(0.28)],
         startPoint: .top,
         endPoint: .bottom
+    )
+
+    /// 위 모서리에만 얹는 두꺼운 하이라이트. 중간에서 사라져 아래 옆면과 부딪히지 않는다.
+    static let rimCrown = LinearGradient(
+        colors: [.white.opacity(0.75), .white.opacity(0.12), .clear],
+        startPoint: .top,
+        endPoint: .center
     )
 
     /// 테두리 안쪽 윗판은 한 단 내려앉아 있어 조금 어둡다.
