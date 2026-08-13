@@ -1886,11 +1886,17 @@ struct GlobeMapView: UIViewRepresentable {
             let partnerX = displayedX(for: partner, in: mapView)
             let currentOrder = markerOrder.wrappedValue
             let nextOrder: GlobeMarkerOrder
+            // 순서는 Route당 한 번만 정하므로 값이 왔다 갔다 할 여지가 없고,
+            // 넓은 불감대는 흔들림을 막는 대신 멀쩡한 판정을 버리기만 한다.
+            // pitch 0에 heading을 대입하는 곳이 없어 화면 좌우 순서는 카메라
+            // 거리와 무관하다. 확대는 부호를 바꾸지 않고 간격만 벌리므로,
+            // 전 지구 화면의 몇 pt 차이도 이미 최종 화면과 같은 답이다.
+            // 두 도시가 사실상 같은 지점일 때만 현재 값을 유지한다.
             let horizontalGap = partnerX - mineX
-            let crossingTolerance: CGFloat = 8
-            if horizontalGap > crossingTolerance {
+            let coincidentTolerance: CGFloat = 0.5
+            if horizontalGap > coincidentTolerance {
                 nextOrder = .mineOnLeft
-            } else if horizontalGap < -crossingTolerance {
+            } else if horizontalGap < -coincidentTolerance {
                 nextOrder = GlobeMarkerOrder(left: .partner)
             } else {
                 nextOrder = currentOrder
