@@ -520,6 +520,7 @@ struct GlobeMapView: UIViewRepresentable {
         private var nearbyFramingGeneration = 0
         private var nearbyFramingFramesRemaining = 0
         private var nearbyFramingDisplayLink: CADisplayLink?
+        private var showsCoordinateLegsForInitialFraming = true
         private var backsideRevealFramesRemaining = 0
         private var backsideRevealDisplayLink: CADisplayLink?
         private var isUserCameraMotionActive = false
@@ -769,6 +770,13 @@ struct GlobeMapView: UIViewRepresentable {
             for (id, annotation) in annotationsByID {
                 (mapView.view(for: annotation) as? GlobeProfileAnnotationView)?
                     .setCoordinateOffsetX(coincidentCoordinateOffsetX(for: id))
+            }
+        }
+
+        private func applyCoordinateLegVisibility(in mapView: MKMapView) {
+            for annotation in annotationsByID.values {
+                (mapView.view(for: annotation) as? GlobeProfileAnnotationView)?
+                    .setShowsCoordinateLeg(showsCoordinateLegsForInitialFraming)
             }
         }
 
@@ -1257,6 +1265,7 @@ struct GlobeMapView: UIViewRepresentable {
             requestedFraming = framing
             needsInitialFraming = true
             defersMarkerSyncUntilCameraCommit = true
+            showsCoordinateLegsForInitialFraming = true
             markerPlacementDisplayLink?.invalidate()
             markerPlacementDisplayLink = nil
             nearbyFramingDisplayLink?.invalidate()
@@ -1265,6 +1274,7 @@ struct GlobeMapView: UIViewRepresentable {
             framingGeneration += 1
 
             guard let mapView else { return }
+            applyCoordinateLegVisibility(in: mapView)
             let generation = framingGeneration
             DispatchQueue.main.async { [weak self, weak mapView] in
                 guard let self,
@@ -1470,6 +1480,10 @@ struct GlobeMapView: UIViewRepresentable {
             let zoomScale = min(requestedGap, safeGapLimit) / currentGap
             guard zoomScale > 1 else { return }
 
+            // 초기 전 지구 화면을 유지하는 Route만 도시 좌표를 가리키는 다리를 쓴다.
+            // 근거리 확대가 실제로 확정되면 프로필 중심이 곧 도시 좌표가 되도록 전환한다.
+            showsCoordinateLegsForInitialFraming = false
+            applyCoordinateLegVisibility(in: mapView)
             let camera = mapView.camera
             camera.centerCoordinateDistance /= zoomScale
             camera.centerCoordinate = route.midpointCoordinate
@@ -1547,6 +1561,7 @@ struct GlobeMapView: UIViewRepresentable {
             guard let profileView = view as? GlobeProfileAnnotationView else { return view }
             profileView.configure(with: annotation.marker)
             profileView.setBacksidePresentation(false)
+            profileView.setShowsCoordinateLeg(showsCoordinateLegsForInitialFraming)
             profileView.setSide(markerOrder.wrappedValue.side(for: annotation.id))
             profileView.setCoordinateOffsetX(
                 coincidentCoordinateOffsetX(for: annotation.id)
@@ -1975,6 +1990,9 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         static let batteryHeight: CGFloat = 17
         static let batteryBodySize = CGSize(width: 21, height: 10.5)
         static let batteryCapSize = CGSize(width: 1.6, height: 4.4)
+        static let dotSize: CGFloat = 6
+        static let dotOriginY: CGFloat = 84
+        static let dotCenterY = dotOriginY + dotSize / 2
     }
 
     /// 도시 좌표가 프로필 원의 중심과 정확히 겹치도록 annotation 캔버스를 보정한다.
@@ -1985,6 +2003,15 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         )
     }
 
+    static var pinCenterOffset: CGPoint {
+        CGPoint(
+            x: 0,
+            y: Layout.canvasSize.height / 2 - Layout.dotCenterY
+        )
+    }
+
+    private let stemView = UIView()
+    private let dotView = UIView()
     private let selectionHaloView = UIView()
     private let avatarView = UIView()
     private let avatarImageView = UIImageView()
@@ -2000,6 +2027,8 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     private var batteryDisplay: GlobeBatteryDisplay?
     private var markerSide = GlobeMarkerSide.left
     private var isBacksidePresentation = false
+    private var showsCoordinateLeg = true
+    private var coordinateOffsetX: CGFloat = 0
     private let tapFeedback = UIImpactFeedbackGenerator(style: .medium)
     var onActivate: (() -> Void)?
 
@@ -2007,7 +2036,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
 
         bounds = CGRect(origin: .zero, size: Layout.canvasSize)
-        centerOffset = Self.avatarCenterOffset
+        centerOffset = Self.pinCenterOffset
         backgroundColor = .clear
         isOpaque = false
         clipsToBounds = false
@@ -2016,6 +2045,18 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         collisionMode = .circle
         isAccessibilityElement = true
         accessibilityTraits = [.button]
+
+        stemView.backgroundColor = UIColor.white.withAlphaComponent(0.82)
+        stemView.layer.cornerRadius = 0.5
+        addSubview(stemView)
+
+        dotView.backgroundColor = .white
+        dotView.layer.cornerRadius = Layout.dotSize / 2
+        dotView.layer.shadowColor = UIColor.black.cgColor
+        dotView.layer.shadowOpacity = 0.25
+        dotView.layer.shadowRadius = 2
+        dotView.layer.shadowOffset = .zero
+        addSubview(dotView)
 
         selectionHaloView.backgroundColor = UIColor.white.withAlphaComponent(0.18)
         selectionHaloView.alpha = 0
@@ -2140,6 +2181,20 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         tapControl.frame = avatarView.frame.insetBy(dx: -7, dy: -7)
 
         layoutBatteryPill()
+
+        let avatarBottom = Layout.avatarTop + Layout.avatarSize
+        stemView.frame = CGRect(
+            x: bounds.midX - 0.5,
+            y: avatarBottom - 2,
+            width: 1,
+            height: Layout.dotOriginY - avatarBottom + 2
+        )
+        dotView.frame = CGRect(
+            x: bounds.midX - Layout.dotSize / 2,
+            y: Layout.dotOriginY,
+            width: Layout.dotSize,
+            height: Layout.dotSize
+        )
     }
 
     private func layoutBatteryPill() {
@@ -2205,6 +2260,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         accessibilityValue = nil
         setBacksidePresentation(false)
         setCoordinateOffsetX(0)
+        setShowsCoordinateLeg(true)
         accessibilityTraits = [.button]
         tapFeedback.prepare()
     }
@@ -2216,16 +2272,34 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     }
 
     func setCoordinateOffsetX(_ horizontalOffset: CGFloat) {
-        let nextOffset = CGPoint(
-            x: horizontalOffset,
-            y: Self.avatarCenterOffset.y
-        )
+        coordinateOffsetX = horizontalOffset
+        updateCenterOffset()
+    }
+
+    func setShowsCoordinateLeg(_ showsCoordinateLeg: Bool) {
+        self.showsCoordinateLeg = showsCoordinateLeg
+        updateCoordinateLegVisibility()
+        updateCenterOffset()
+    }
+
+    private func updateCenterOffset() {
+        let verticalOffset = showsCoordinateLeg
+            ? Self.pinCenterOffset.y
+            : Self.avatarCenterOffset.y
+        let nextOffset = CGPoint(x: coordinateOffsetX, y: verticalOffset)
         guard centerOffset != nextOffset else { return }
         centerOffset = nextOffset
     }
 
+    private func updateCoordinateLegVisibility() {
+        let hidesCoordinateLeg = isBacksidePresentation || !showsCoordinateLeg
+        stemView.isHidden = hidesCoordinateLeg
+        dotView.isHidden = hidesCoordinateLeg
+    }
+
     func setBacksidePresentation(_ isBacksidePresentation: Bool) {
         self.isBacksidePresentation = isBacksidePresentation
+        updateCoordinateLegVisibility()
         avatarView.alpha = isBacksidePresentation ? 0.94 : 1
         accessibilityHint = "두 번 탭하면 프로필 상태를 표시합니다"
         updateAccessibilityValue()
