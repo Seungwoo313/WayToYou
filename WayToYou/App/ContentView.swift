@@ -96,10 +96,10 @@ struct ContentView: View {
             }
             // Signal 기계는 시트가 아니라 오버레이다. iOS 26 시트는 배경 유리를 강제로
             // 그려서 기계 옆에 판이 남는데, 이건 기계만 화면 밑에서 올라와야 한다.
-            .overlay { signalScrim.animation(signalMachineMotion, value: isSignalOpen) }
-            .overlay(alignment: .bottom) {
-                signalMachine.animation(signalMachineMotion, value: isSignalOpen)
-            }
+            // 기계를 넣었다 뺐다 하지 않고 화면 밖에 세워 둔 채 위치만 옮긴다.
+            // 뷰를 만들고 텍스처를 굽는 일이 애니메이션 첫 프레임에 몰리면 그때만 끊긴다.
+            .overlay { signalScrim }
+            .overlay(alignment: .bottom) { signalMachine }
             .sheet(item: $route.sheetPresented) { destination in
                 sheet(for: destination)
             }
@@ -340,43 +340,42 @@ struct ContentView: View {
     }
 
     /// 기계 밖을 누르면 내려간다. 지구를 가리지 않게 옅게만 덮는다.
-    @ViewBuilder
     private var signalScrim: some View {
-        if isSignalOpen {
-            Color.black.opacity(0.28)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture { route = .none }
-                .transition(.opacity)
-        }
+        Color.black
+            .opacity(isSignalOpen ? 0.28 : 0)
+            .ignoresSafeArea()
+            .contentShape(Rectangle())
+            .onTapGesture { route = .none }
+            .allowsHitTesting(isSignalOpen)
+            .animation(signalMachineMotion, value: isSignalOpen)
     }
 
     /// 시트가 아니라 오버레이로 올라오는 Signal 기계.
-    @ViewBuilder
     private var signalMachine: some View {
-        if isSignalOpen {
-            SignalPickerSheet(
-                keys: store.signalKeys,
-                selectedSignal: store.latestSignal(.outgoing, at: now)?.signal,
-                partnerName: store.partnerProfile?.displayName ?? "상대",
-                partnerCityName: store.partnerCity.name,
-                partnerTimeZone: store.partnerCity.timeZone,
-                myTimeZone: store.homeCity.timeZone,
-                distanceKilometers: store.distanceKilometers,
-                now: now,
-                onSelect: { signal in
-                    route = .none
-                    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                    Task { _ = await store.sendSignal(signal) }
-                },
-                onEditKey: { index, key in
-                    store.setSignalKey(key, at: index)
-                },
-                onDismiss: { route = .none }
-            )
-            // 물건이 밑에서 올라오는 것이라 페이드를 섞지 않는다. 섞으면 실체가 흐려진다.
-            .transition(.move(edge: .bottom))
-        }
+        SignalPickerSheet(
+            keys: store.signalKeys,
+            selectedSignal: store.latestSignal(.outgoing, at: now)?.signal,
+            partnerName: store.partnerProfile?.displayName ?? "상대",
+            partnerCityName: store.partnerCity.name,
+            partnerTimeZone: store.partnerCity.timeZone,
+            myTimeZone: store.homeCity.timeZone,
+            distanceKilometers: store.distanceKilometers,
+            now: now,
+            onSelect: { signal in
+                route = .none
+                UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                Task { _ = await store.sendSignal(signal) }
+            },
+            onEditKey: { index, key in
+                store.setSignalKey(key, at: index)
+            },
+            onDismiss: { route = .none }
+        )
+        // 닫혀 있을 때는 화면 밖에 그대로 서 있다. 위치만 바뀌므로 여는 프레임에
+        // 뷰 생성이나 텍스처 굽기가 끼어들지 않는다.
+        .offset(y: isSignalOpen ? 0 : SignalPickerSheet.parkedTravel)
+        .allowsHitTesting(isSignalOpen)
+        .animation(signalMachineMotion, value: isSignalOpen)
     }
 
     @ViewBuilder

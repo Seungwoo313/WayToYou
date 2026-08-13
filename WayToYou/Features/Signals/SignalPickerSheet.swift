@@ -9,6 +9,9 @@ import SwiftUI
 /// 여기 쓰는 플라스틱·LED 색은 이 기계 안에서만 쓰는 재질이라
 /// 전역 `Palette`에 넣지 않고 `Keypad`에 가둔다.
 struct SignalPickerSheet: View {
+    /// 닫혀 있을 때 화면 밖으로 내려가 있는 거리. 어떤 기기에서도 완전히 벗어난다.
+    static let parkedTravel: CGFloat = 1_000
+
     let keys: [SignalKey]
     let selectedSignal: CoupleSignal?
     let partnerName: String
