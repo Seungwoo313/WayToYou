@@ -3,6 +3,7 @@
 작성일: 2026-08-13
 브랜치: `feature/nearby-view`
 최신 기능 병합 기준: `d979b84` (`codex/minor-change` PR #4 병합 완료)
+현재 작업 HEAD: `a6d5be9` (`feature/nearby-view`)
 
 다음 채팅에서 이어갈 구체적인 구현 범위와 최신 결정은 `docs/next-session-handoff.md`를 우선한다.
 
@@ -93,7 +94,9 @@
 - 마커 탭 시 spring/halo와 selection 햅틱을 재생한다. 지도 제스처 시작 시 선택을 닫으며 카메라는 유지한다.
 - 큰 정보 카드와 도시/시간 pill은 시각 검토 후 제거했다.
 - 이름·사진·Signal 갱신은 annotation view만 갱신하고 카메라 framing key에는 도시 좌표만 포함한다.
-- 프로필 마커의 도시 좌표는 46pt 원형 사진의 중심과 일치한다. 기존의 사진 아래 다리와 흰 위치 점은 제거했으며, Route는 사진 아래로 이어져 화면에서는 원 테두리에 닿는 것처럼 보인다.
+- 프로필 마커 앵커는 초기 근거리 확대 여부에 따라 나뉜다. 기본 전 지구 카메라를 유지하는 Route는 사진 아래의 흰 다리와 위치 점을 표시하고 점 중심을 도시 좌표에 고정한다. 근거리 확대가 실제로 확정된 Route는 다리와 점을 숨기고 46pt 원형 사진 중심을 도시 좌표에 맞춘다.
+- 이 분기는 물리적 km가 아니라 기존 근거리 카메라의 최종 `zoomScale > 1` 판정을 그대로 사용한다. 사용자가 나중에 수동으로 확대·축소해도 최초 framing에서 정한 마커 형태는 바뀌지 않으며, 도시 조합이 바뀌어 새 framing을 요청할 때 초기화한다.
+- 뒷면 화면 표현에는 실제 도시 좌표를 가리킬 수 있는 지표 앵커가 없으므로 항상 다리와 위치 점을 숨긴다. 같은 좌표 특수 케이스는 카메라를 확대하지 않고 두 annotation 전체를 68pt 간격으로 분리한다.
 - 두 도시 중심은 `MKGeodesicPolyline`으로 연결해 지구 곡률을 따르는 최단 Route를 표시한다.
 - Route는 얇은 반투명 흰색 점선이며 마커보다 아래에 그린다. 도시가 같으면 선을 표시하지 않는다.
 - 도시가 바뀔 때만 overlay를 교체하며, 이름·사진·Signal·배터리 갱신은 Route와 카메라에 영향을 주지 않는다.
@@ -120,6 +123,8 @@
 - `21210a9 feat: add globe backside route marker`
 - `3c4ffa6 fix: stabilize backside globe markers`
 - `0182240 fix: frame near-antipodal globe routes`
+- `62b2df9 Add adaptive nearby city framing`
+- `a6d5be9 Restore globe marker legs by framing mode`
 
 ### 홈 도시 정보·설정·Route Heart — 구현 완료
 
@@ -310,8 +315,9 @@ supabase db push --dry-run
 - 프로그래밍 가능한 도시 주입으로 준대척 문제 조합 8개와 기존 정상 조합 5개를 iPhone 17 시뮬레이터에서 다시 캡처했다. 최종 결과와 중간 실험 이미지 50장은 `artifacts/debug-city-tests/png/` 한 폴더에 단계 접두어를 붙여 보관한다.
 - 근거리 카메라는 같은 시뮬레이터에서 도시 조합 25개의 Before / After 50장과 동일 입력 준대척 회귀 26장을 캡처했다. 준대척 지도 영역의 변경 전·후 평균 RGB 절대 오차는 0.55...2.72 / 255였다.
 - 근거리 카메라 최종 변경분은 Debug 시뮬레이터와 Release 실기기 빌드에 성공했고 `승우의 iPhone`에 설치·실행했다. 실행 뒤 기기에서 `WayToYou` 프로세스가 유지되는 것도 확인했다.
+- `a6d5be9`의 framing별 마커 다리 분기는 Debug iPhone 17 시뮬레이터와 Release 실기기 빌드에 성공했다. `승우의 iPhone`에 설치·실행한 뒤 `WayToYou` 프로세스 유지도 확인했다.
 - `0182240`의 최종 카메라 변경은 Debug 시뮬레이터 검증 뒤 Release 구성으로 빌드하고 `승우의 iPhone`에 설치·실행했다.
 - 8개 Supabase migration은 원격과 일치하고 dry-run 기준 추가 적용 항목이 없다.
 - 두 실기기 실행 후 원격 Device Presence 행 2개를 확인했고 충전 전환·freshness 수동 QA도 완료했다.
 - 앱 인증 토큰은 iOS Keychain을 사용하며, Keychain은 Supabase DB가 아니라 기기 내부의 보호된 인증 저장소다.
-- 최신 기능 병합 커밋은 `d979b84`이며 현재 근거리 카메라 작업은 `feature/nearby-view`에 있다.
+- 최신 기능 병합 기준은 `d979b84`이고, 현재 `feature/nearby-view`의 작업 HEAD는 `a6d5be9`다.
