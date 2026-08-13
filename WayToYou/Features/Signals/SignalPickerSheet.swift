@@ -23,13 +23,10 @@ struct SignalPickerSheet: View {
     let timeOffset: String
     let distanceKilometers: Int
     let onSelect: (CoupleSignal) -> Void
-    let onEditKey: (Int, SignalKey) -> Void
+    let onEditKey: (Int) -> Void
     let onDismiss: () -> Void
 
     @State private var isEditingKeys = false
-    @State private var editingIndex: Int?
-    @State private var draftEmoji = ""
-    @State private var draftLabel = ""
     @State private var dragOffset: CGFloat = 0
     /// 키를 누르면 눌리기만 하고, 보내는 것은 엔터가 맡는다.
     /// 기계는 늘 아무것도 눌리지 않은 채로 열린다. 지난번에 보낸 것은 이미 지구본 위에 있다.
@@ -44,19 +41,6 @@ struct SignalPickerSheet: View {
                     stagedSignal = nil
                     isEditingKeys = false
                 }
-            }
-            .alert("키캡 바꾸기", isPresented: isPresentingEditor) {
-                TextField("이모지", text: $draftEmoji)
-                    .onChange(of: draftEmoji) { _, typed in
-                        // 글자나 숫자를 눌러도 키캡에 올라가지 않게 이모지 하나만 남긴다.
-                        draftEmoji = CoupleSignal.keycap(from: typed)?.emoji ?? ""
-                    }
-                TextField("설명 \(SignalKey.labelLimit)자 이내", text: $draftLabel)
-                    .onChange(of: draftLabel) { _, typed in
-                        draftLabel = String(typed.prefix(SignalKey.labelLimit))
-                    }
-                Button("취소", role: .cancel) { editingIndex = nil }
-                Button("저장") { commitEditing() }
             }
     }
 
@@ -80,7 +64,7 @@ struct SignalPickerSheet: View {
                 canSend: stagedSignal != nil,
                 onStage: stage,
                 onSend: send,
-                onEdit: beginEditing
+                onEdit: onEditKey
             )
         }
         .padding(Keypad.chassisPadding)
@@ -114,13 +98,6 @@ struct SignalPickerSheet: View {
             }
     }
 
-    private var isPresentingEditor: Binding<Bool> {
-        Binding(
-            get: { editingIndex != nil },
-            set: { if !$0 { editingIndex = nil } }
-        )
-    }
-
     private func toggleEditing() {
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
@@ -141,20 +118,6 @@ struct SignalPickerSheet: View {
         }
         self.stagedSignal = nil
         onSelect(stagedSignal)
-    }
-
-    private func beginEditing(_ index: Int) {
-        guard keys.indices.contains(index) else { return }
-        draftEmoji = keys[index].emoji
-        draftLabel = keys[index].label
-        editingIndex = index
-    }
-
-    private func commitEditing() {
-        defer { editingIndex = nil }
-        guard let index = editingIndex,
-              let signal = CoupleSignal.keycap(from: draftEmoji) else { return }
-        onEditKey(index, SignalKey(signal: signal, label: draftLabel))
     }
 
     /// 큰 숫자는 두 도시 사이 거리다. 이 기계가 켜져 있는 이유 그 자체라 시각보다 앞에 둔다.

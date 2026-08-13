@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var selectedGlobeMarker: GlobeMarkerSelection?
     @State private var launchHoldElapsed = false
     @State private var globeMarkerOrder = GlobeMarkerOrder.mineOnLeft
+    @State private var editingKeycap: EditingKeycap?
     @State private var weatherByCityID: [String: CurrentCityWeather] = [:]
     @State private var batteryMonitor = DeviceBatteryMonitor()
     @AppStorage("clockDisplayFormat") private var clockDisplayFormatRawValue =
@@ -100,6 +101,11 @@ struct ContentView: View {
             // 뷰를 만들고 텍스처를 굽는 일이 애니메이션 첫 프레임에 몰리면 그때만 끊긴다.
             .overlay { signalScrim }
             .overlay(alignment: .bottom) { signalMachine }
+            .overlay { keycapEditor }
+            // 키캡을 고치는 동안에만 키보드 회피를 끈다. 오버레이 안쪽에 걸면 소용이 없다.
+            // 정렬 기준이 되는 바깥 프레임이 이미 줄어든 뒤라 기계가 통째로 들려 올라간다.
+            // 다른 화면의 입력 칸은 계속 키보드를 피해야 하므로 이때만 끈다.
+            .ignoresSafeArea(.keyboard, edges: editingKeycap == nil ? [] : .bottom)
             .sheet(item: $route.sheetPresented) { destination in
                 sheet(for: destination)
             }
@@ -354,6 +360,20 @@ struct ContentView: View {
             .animation(signalMachineMotion, value: isSignalOpen)
     }
 
+    /// 키캡 하나를 바꾸는 패널. 기계보다 위에, 화면 전체를 덮는다.
+    @ViewBuilder
+    private var keycapEditor: some View {
+        if let editingKeycap {
+            KeycapEditorPanel(target: editingKeycap) {
+                self.editingKeycap = nil
+            } onSave: { key in
+                store.setSignalKey(key, at: editingKeycap.index)
+                self.editingKeycap = nil
+            }
+            .transition(.opacity)
+        }
+    }
+
     /// 시트가 아니라 오버레이로 올라오는 Signal 기계.
     private var signalMachine: some View {
         SignalPickerSheet(
@@ -373,8 +393,9 @@ struct ContentView: View {
                 UIImpactFeedbackGenerator(style: .soft).impactOccurred()
                 Task { _ = await store.sendSignal(signal) }
             },
-            onEditKey: { index, key in
-                store.setSignalKey(key, at: index)
+            onEditKey: { index in
+                guard store.signalKeys.indices.contains(index) else { return }
+                editingKeycap = EditingKeycap(index: index, key: store.signalKeys[index])
             },
             onDismiss: { route = .none }
         )
