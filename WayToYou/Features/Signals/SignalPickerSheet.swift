@@ -167,7 +167,7 @@ private struct ChassisSurface: View {
             outer
                 .fill(Keypad.chassisSideFill)
                 .offset(y: Keypad.chassisThickness)
-                .shadow(color: .black.opacity(0.72), radius: 18, y: 24)
+                .shadow(color: .black.opacity(0.72), radius: 14, y: 18)
 
             // 위로 삐져나온 윗면. 아래에 옆면 두께가 보이는 만큼 위에도 실제 띠가 있어야
             // 같은 물건으로 읽힌다. 위에서 빛이 오니 이 면이 몸통에서 가장 밝다.
@@ -183,7 +183,6 @@ private struct ChassisSurface: View {
                 // 이게 없으면 상단만 잘려 나간 것처럼 납작해 보인다.
                 .overlay { outer.strokeBorder(Keypad.rimCrown, lineWidth: 3) }
                 .overlay { PlasticGrain().clipShape(outer) }
-                .shadow(color: .black.opacity(0.4), radius: 5, y: 7)
 
             // 테두리 안으로 한 단 내려앉은 윗판.
             inner
@@ -194,7 +193,6 @@ private struct ChassisSurface: View {
                     width: 4
                 )
                 .overlay { inner.strokeBorder(Keypad.recessEdge, lineWidth: 1) }
-                .overlay { PlasticGrain().clipShape(inner) }
                 .padding(Keypad.chassisRim)
         }
     }
@@ -557,7 +555,6 @@ private struct KeycapFace: View {
                     .shadow(color: .black.opacity(0.45), radius: 2, y: 1.5)
             }
             .overlay(alignment: .topTrailing) { activeLamp }
-            .overlay { PlasticGrain().clipShape(shape) }
     }
 
     /// 손가락이 닿는 면은 살짝 파여 있다.
@@ -628,7 +625,8 @@ private struct PlasticGrain: View {
                 seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
                 return CGFloat((seed >> 33) % 1_000) / 1_000
             }
-            let count = Int(size.width * size.height / 14)
+            // 밀도를 높여도 5% 불투명도에서는 차이가 안 보이는데, 굽는 비용만 그만큼 늘어난다.
+            let count = Int(size.width * size.height / 44)
             for _ in 0..<count {
                 let point = CGPoint(x: next() * size.width, y: next() * size.height)
                 let bright = next() > 0.5
@@ -668,7 +666,8 @@ private enum Keypad {
     static let chassisCrown: CGFloat = 5
     /// 텍스처로 굳힐 때 바깥 그림자가 잘리지 않도록 잡아 두는 여백.
     /// 몸통 그림자가 아래로 `y + radius`만큼 번지므로 그보다 넉넉해야 한다.
-    static let rasterMargin: CGFloat = 48
+    /// 넓힐수록 굽는 면적이 그대로 늘어나므로 딱 필요한 만큼만 둔다.
+    static let rasterMargin: CGFloat = 36
     /// 테두리가 배경 안쪽으로 들어오므로 내용은 테두리 두께만큼 더 물러난다.
     static let chassisPadding: CGFloat = 18
     static let chassisGap: CGFloat = 13
