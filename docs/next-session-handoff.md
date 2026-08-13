@@ -4,17 +4,19 @@
 
 작업 폴더: `/Users/seungwoo/Desktop/WayToYou`
 
-브랜치: `feature/nearby-view`
+브랜치: `feature/globe-animation`
 
 최신 기능 병합 기준: `d979b84 Merge pull request #4 from Seungwoo313/codex/minor-change`
 
-현재 작업 HEAD: `a6d5be9 Restore globe marker legs by framing mode`
+현재 작업 HEAD: `fd8c114 Dive into the globe instead of snapping to the region`
+
+`feature/swiftui-globe`는 삭제했다. 그 커밋 3개(`23411be`, `a6d5be9`, `62b2df9`)는 `feature/globe-animation`과 `feature/nearby-view`에 그대로 남아 있다.
 
 이 문서는 다음 채팅에서 현재 작업을 다시 조사하지 않고 곧바로 이어가기 위한 기준 문서다. 다음 작업을 시작할 때 이 문서와 `git status`, 최근 `git log`를 먼저 확인한다.
 
 ## 1. 지금 바로 이어서 할 일
 
-> **2026-08-13 업데이트**: PR #4까지 `main`에 병합한 뒤 `feature/nearby-view`에서 근거리 도시 카메라와 framing별 프로필 마커 다리 정책을 구현했다. Device Presence와 수동 QA, 프로필 도시·기본 배송 공항 분리, 홈 도시 시계·날씨·설정, Route Heart 설정, 프로그래밍 가능한 DEBUG 도시 테스트, 준대척 카메라 fallback까지 기존 기준으로 유지한다.
+> **2026-08-13 업데이트**: PR #4까지 `main`에 병합한 뒤 `feature/nearby-view`에서 근거리 도시 카메라와 framing별 프로필 마커 다리 정책을 구현했다. 이어 `feature/globe-animation`에서 그 근거리 확대를 전 지구에서 지역으로 내려가는 하강 애니메이션으로 바꿨다(`fd8c114`). 확대가 발동하는 조건과 목적지 카메라는 그대로다. 기법과 함정은 `docs/camera-dive-animation.md`에 정리했고, 다른 화면에서 카메라를 움직일 때도 그 문서를 먼저 본다. Device Presence와 수동 QA, 프로필 도시·기본 배송 공항 분리, 홈 도시 시계·날씨·설정, Route Heart 설정, 프로그래밍 가능한 DEBUG 도시 테스트, 준대척 카메라 fallback까지 기존 기준으로 유지한다.
 
 도시 중심 프로필 마커, 탭 선택 애니메이션·햅틱, Signal 스티커, 신규 Signal 수신 토스트는 `8367f0a`까지 완료됐다. 그 뒤 도시 Route, Device Presence, 프로필 도시·기본 공항 분리, 홈 시계·날씨·설정과 Route Heart를 추가했고, 준대척 도시의 뒷면 Route 표현과 카메라는 `21210a9`, `3c4ffa6`, `0182240`에서 정리했다. 큰 정보 카드와 기존 도시/시간 pill은 복원하지 않는다. 현재 도시 시계·날씨는 홈 좌우의 작은 정보로 구현돼 있다.
 
