@@ -4,15 +4,19 @@
 
 작업 폴더: `/Users/seungwoo/Desktop/WayToYou`
 
-브랜치: `codex/minor-change`
+브랜치: `feature/globe-animation`
 
-최신 기능 병합 기준: `2c2fd0c Merge pull request #3 from Seungwoo313/codex/product-plan-mvp`
+최신 기능 병합 기준: `d979b84 Merge pull request #4 from Seungwoo313/codex/minor-change`
+
+현재 작업 HEAD: `fd8c114 Dive into the globe instead of snapping to the region`
+
+`feature/swiftui-globe`는 삭제했다. 그 커밋 3개(`23411be`, `a6d5be9`, `62b2df9`)는 `feature/globe-animation`과 `feature/nearby-view`에 그대로 남아 있다.
 
 이 문서는 다음 채팅에서 현재 작업을 다시 조사하지 않고 곧바로 이어가기 위한 기준 문서다. 다음 작업을 시작할 때 이 문서와 `git status`, 최근 `git log`를 먼저 확인한다.
 
 ## 1. 지금 바로 이어서 할 일
 
-> **2026-08-13 업데이트**: 두 기능 브랜치를 PR #2, #3으로 `main`에 병합하고 원격과 동기화했다. Device Presence와 수동 QA, 프로필 도시·기본 배송 공항 분리, 홈 도시 시계·날씨·설정, Route Heart 설정, 프로그래밍 가능한 DEBUG 도시 테스트, 준대척 카메라 fallback까지 반영됐다.
+> **2026-08-13 업데이트**: PR #4까지 `main`에 병합한 뒤 `feature/nearby-view`에서 근거리 도시 카메라와 framing별 프로필 마커 다리 정책을 구현했다. 이어 `feature/globe-animation`에서 그 근거리 확대를 전 지구에서 지역으로 내려가는 하강 애니메이션으로 바꿨다(`fd8c114`). 확대가 발동하는 조건과 목적지 카메라는 그대로다. 기법과 함정은 `docs/camera-dive-animation.md`에 정리했고, 다른 화면에서 카메라를 움직일 때도 그 문서를 먼저 본다. Device Presence와 수동 QA, 프로필 도시·기본 배송 공항 분리, 홈 도시 시계·날씨·설정, Route Heart 설정, 프로그래밍 가능한 DEBUG 도시 테스트, 준대척 카메라 fallback까지 기존 기준으로 유지한다.
 
 도시 중심 프로필 마커, 탭 선택 애니메이션·햅틱, Signal 스티커, 신규 Signal 수신 토스트는 `8367f0a`까지 완료됐다. 그 뒤 도시 Route, Device Presence, 프로필 도시·기본 공항 분리, 홈 시계·날씨·설정과 Route Heart를 추가했고, 준대척 도시의 뒷면 Route 표현과 카메라는 `21210a9`, `3c4ffa6`, `0182240`에서 정리했다. 큰 정보 카드와 기존 도시/시간 pill은 복원하지 않는다. 현재 도시 시계·날씨는 홈 좌우의 작은 정보로 구현돼 있다.
 
@@ -115,7 +119,7 @@ Device Presence 수동 QA와 도시 Route 선, 프로필 도시·기본 배송 �
 | 프로필 성공 토스트 | 구현 완료 | 실기기 시각·VoiceOver 확인 |
 | DEBUG 시뮬레이터 계정·도시 주입 | 완료 | 설정 즉시 변경·실행 환경변수·자동 캡처 지원, 서버 실시간 동기화는 의도적으로 없음 |
 | 홈 도시 시계·날씨·설정 | 완료 | Open-Meteo 장애·오프라인 시 빈 날씨 처리 유지 |
-| MapKit 지구본 | 위성 지구본·동적 카메라·도시 프로필 마커·Signal·배터리·도시 Route·뒷면 표현·준대척 fallback 완료 | 배송 Route와 Gift annotation 미구현 |
+| MapKit 지구본 | 위성 지구본·동적 카메라·근거리 확대·도시 프로필 마커·Signal·배터리·도시 Route·뒷면 표현·준대척 fallback 완료 | 배송 Route와 Gift annotation 미구현 |
 | Device Presence·배터리 | 완료 | 두 실기기 publish·충전 전환·freshness 화면 QA 완료 |
 | Parcel/Letter/Keepsakes | 로컬 데모 흐름 존재 | 기본 공항 자동 적용·변경·Route 스냅샷·서버 전송 구현 필요 |
 | Polaroid·Voice Tape | 미착수 | Product Plan 후속 단계 |
@@ -148,7 +152,7 @@ Device Presence 수동 QA와 도시 Route 선, 프로필 도시·기본 배송 �
 - 팬·핀치·회전·관성은 MapKit 기본 동작을 유지한다. pitch는 지구 실루엣과 Route 끝 투영을 일치시키기 위해 비활성화한다.
 - 카메라 경계는 투영 붕괴 방지를 위해 위도 **±70°**다.
 - 두 사람의 프로필은 공항이 아닌 각 도시의 `latitude/longitude`에 표시한다.
-- 마커는 46pt 원형 사진을 중심으로 구성하며 사진이 없으면 기존 이니셜 fallback을 공유한다. 사진 아래의 짧은 선과 흰 위치 점은 제거됐다.
+- 마커는 46pt 원형 사진을 중심으로 구성하며 사진이 없으면 기존 이니셜 fallback을 공유한다. 기본 전 지구 상태에서는 사진 아래의 짧은 흰 다리와 위치 점을 표시하고, 초기 근거리 확대 대상에서는 둘을 숨긴다.
 - 사진·이름·Signal 변경은 annotation만 동기화하고 현재 카메라와 사용자 조작 상태는 유지한다.
 - 최초 순서는 `connect → requestInitialFraming → sync(latestMarkers 저장)`이다. layout 후 카메라를 확정하고 `CADisplayLink` 두 프레임 뒤 annotation을 한 번 적용한다.
 - 이 순서를 바꾸거나 카메라 commit 중 annotation을 추가하면 손을 대기 전 마커가 보이지 않고 첫 pan에서 나타나는 현상이 반복됐다. 현재 두 실기기에서 확인된 순서를 가볍게 리팩터링하지 않는다.
@@ -168,21 +172,25 @@ Device Presence 수동 QA와 도시 Route 선, 프로필 도시·기본 배송 �
 - `CameraFraming.placement(in:)`의 기존 구면 중점·하단 여백 계산은 기본 경로다. 도시 간 각거리 `> 165°`와 화면상 Route 축 `< 36°`가 동시에 성립할 때만 동거리 적도 fallback 중심을 사용한다.
 - 일반 준대척 fallback은 대권 중점 쪽으로 20° 기울이고 뒷면 허용 범위를 40°로 넓힌다. 각거리 `> 175°`이며 대권 중점 위도 절댓값이 `> 70°`인 극점 특수 케이스만 Route 위로 55° 이동하고 허용 범위를 70°로 둔다.
 - 이 조건 분기는 기존에 잘 보이던 Route의 카메라를 유지하면서 Bogotá–Jakarta, Quito–Kuala Lumpur처럼 극점 인접 중점에서 과도하게 확대되거나 양 끝이 화면 밖으로 밀리던 조합만 보정하기 위한 것이다. 상수를 일반 Route 전체에 적용하지 않는다.
+- 근거리 카메라는 `CameraFraming.placement(in:)`를 수정하지 않는다. 기존 전 지구 카메라와 annotation을 먼저 커밋하고 2 display frame을 더 기다린 뒤, 두 도시가 실제 앞면·화면 안에 있으며 프로필 중심 간격이 50pt 미만이거나 중앙 Route Heart의 최대 heartbeat 크기가 프로필과 4pt 여백을 확보하지 못할 때만 현재 `centerCoordinateDistance`를 줄인다.
+- 확대 목표는 사용 가능 화면 너비의 65%, 236...248pt이며 카메라 거리는 최소 3.35배 가까이 당기고 Route의 구면 중점으로 중심을 옮긴다. 작은 화면·가로 화면에서는 Route 방향과 68×92pt 프로필 전체 캔버스를 기준으로 안전한 최대 간격을 계산해 확대를 제한한다. 어정쩡하게 잘린 지구나 화면 밖 끝점이 아니라 두 사람이 모두 보이는 확실한 지역 뷰로 끝난다. 조건을 통과하지 않으면 카메라 write가 없으므로 기존 지구본이 유지된다. 같은 좌표는 카메라 확대 대신 두 annotation을 전체 canvas 폭인 68pt 간격으로 분리한다.
+- Heart 설정을 나중에 켜도 카메라가 다시 움직이지 않도록 초기 framing에서 최대 heartbeat 공간을 항상 예약한다. `RouteHeartAnnotationView`는 MapKit collision 회피로 사라지지 않게 `.none`을 사용한다.
+- 근거리 확대는 현재 camera center, pitch 0을 유지한 MapKit 기본 `setCamera` 애니메이션이다. Reduce Motion에서는 애니메이션을 끄며, 확대 대기 중 사용자가 pan/pinch/rotate를 시작하면 pending 확대를 취소한다.
+- 다리 표시 여부는 별도의 거리 임곗값을 만들지 않고 근거리 카메라가 실제로 `zoomScale > 1`을 통과했는지에 묶는다. 통과하지 않아 기본 지구를 유지하면 `showsCoordinateLegsForInitialFraming = true`, 통과해 확대하면 `false`로 고정한다. 사용자의 이후 수동 줌에는 반응하지 않고, 새 도시 Route의 초기 framing 요청에서 다시 `true`로 초기화한다.
+- 검증 자료는 `artifacts/debug-city-tests/nearby-framing-comparison.md`와 `artifacts/debug-city-tests/png/nearby-*`에 있다. iPhone 17 / iOS 26.5에서 25개 거리·투영 조합의 Before / After(지역 확대 18, 지구본 유지 7), Heart를 켠 New York – Miami, 준대척 13개의 동일 입력 Before / After를 보관한다.
 
-#### 프로필 마커 앵커 변경과 이전 방식 보관
+#### 프로필 마커의 framing별 앵커
 
-현행 방식은 도시 좌표와 원형 사진의 중심을 일치시킨다. `GlobeProfileAnnotationView`의 캔버스는 68×92pt이고, 46pt 아바타가 `y = 22`에서 시작하므로 아바타 중심은 캔버스 로컬 좌표 `y = 45`다. annotation 캔버스 중심은 `y = 46`이므로 `centerOffset.y`를 `46 - 45 = 1pt`로 적용한다. Route overlay의 실제 끝 좌표는 도시 중심 그대로이며, 프로필 사진이 선 위에 그려져 화면에서는 점선이 원 테두리에서 시작하고 끝나는 것처럼 보인다.
+`GlobeProfileAnnotationView`는 두 앵커를 모두 보유하고 `setShowsCoordinateLeg(_:)`에서 표시와 `centerOffset`을 함께 전환한다.
 
-2026-08-13 이전 방식은 도시 좌표를 프로필 아래의 흰 위치 점 중심에 고정했다. 복원이 필요할 때 참고할 값은 다음과 같다.
+- 공통 캔버스는 68×92pt, 아바타 반지름은 23pt, 아바타 시작은 `y = 22`다.
+- 기본 전 지구 상태는 흰 위치 점 6×6pt의 중심 `y = 87`을 도시 좌표에 맞춰 `centerOffset.y = 46 - 87 = -41pt`를 사용한다.
+- 다리 frame은 `x = 33.5`, `y = 66`, `width = 1`, `height = 18`이며 흰색 82% 불투명도와 0.5pt corner radius를 사용한다. 점은 흰색과 검정 그림자(opacity 0.25, radius 2)를 사용한다.
+- 초기 근거리 확대 상태는 다리와 점을 숨기고 아바타 중심 `y = 45`를 도시 좌표에 맞춰 `centerOffset.y = 46 - 45 = 1pt`를 사용한다.
+- `setBacksidePresentation(true)`는 framing 상태와 관계없이 다리와 위치 점을 숨긴다.
+- `setCoordinateOffsetX(_:)`는 같은 좌표의 프로필 분리를 담당하고, 현재 다리/아바타 앵커의 세로 offset을 보존한다.
 
-- 캔버스 68×92pt, 아바타 반지름 23pt, 아바타 시작 `y = 22`
-- 흰 위치 점 6×6pt, 시작 `y = 84`, 중심 `y = 87`
-- `centerOffset.y = 46 - 87 = -41pt`
-- 다리 frame은 `x = 33.5`, `y = 66`, `width = 1`, `height = 18`
-- 다리는 흰색 82% 불투명도와 0.5pt corner radius, 점은 흰색과 검정 그림자(opacity 0.25, radius 2)를 사용
-- 뒷면 표현에서는 `setBacksidePresentation(true)`가 다리와 위치 점을 숨김
-
-이전 방식으로 돌아가려면 `dotSize`, `dotOriginY`, `dotCenterY`, `stemView`, `dotView`와 각각의 초기화·layout 코드를 복원하고 annotation의 `centerOffset`을 흰 점 중심 기준으로 되돌린다. 다만 이 경우 Route Heart는 도시 좌표 간 정중앙에 있어도 프로필 원 중심 사이에서는 한쪽으로 치우쳐 보일 수 있다.
+Route overlay의 실제 좌표는 두 방식 모두 도시 중심 그대로다. 다리 표시 여부를 카메라 거리나 사용자 제스처에서 다시 추론하지 말고 Coordinator의 최초 framing 상태를 annotation 재사용 시에도 적용한다.
 
 주요 파일:
 
@@ -343,7 +351,9 @@ xcodebuild \
 
 `0182240`의 카메라 fallback은 코드로 주입한 준대척 문제 조합 8개와 기존 정상 조합 5개의 첫 홈 화면을 iPhone 17 시뮬레이터에서 캡처해 비교했다. 최종 Debug 시뮬레이터 검증 뒤 Release 구성으로 빌드하고 `승우의 iPhone`에 설치·실행했다. 당시 문서와 캡처 파일만 정리한 작업에서는 iOS 소스를 바꾸지 않아 추가 기기 실행을 하지 않았다.
 
-2026-08-13에는 프로필 아래 다리와 흰 위치 점을 제거하고 도시 좌표를 프로필 원 중심에 맞췄다. iPhone 17 시뮬레이터와 실기기용 빌드에 성공했고, 최종 앱을 `승우의 iPhone`에 설치·실행했다.
+2026-08-13에는 한 차례 프로필 아래 다리와 흰 위치 점을 제거하고 도시 좌표를 프로필 원 중심에 맞췄다. 이후 `a6d5be9`에서 기본 전 지구 상태에 과거 다리·위치 점·핀 앵커를 복원하고, 초기 근거리 확대가 실제로 확정된 Route만 다리 없이 아바타 중심 앵커를 쓰도록 분기했다. Debug iPhone 17 시뮬레이터와 Release 실기기 빌드에 성공했고, 최종 앱을 `승우의 iPhone`에 설치·실행한 뒤 프로세스 유지까지 확인했다.
+
+같은 날 `feature/nearby-view`의 근거리 카메라는 iPhone 17 / iOS 26.5에서 거리·투영 조합 25개의 Before / After와 준대척 13개의 동일 입력 회귀를 캡처했다. 최종 Debug·Release 빌드에 성공했고 `승우의 iPhone`에 설치·실행한 뒤 앱 프로세스가 유지되는 것을 확인했다. 비교 자료는 `artifacts/debug-city-tests/nearby-framing-comparison.md`다.
 
 프로필 도시·기본 배송 공항 분리는 iPhone 17 시뮬레이터의 `우리` 화면에서 `서울 ↔ Paris` 도시와 `ICN ↔ CDG` 기본 배송값이 분리되어 보이는 것을 확인했다. 같은 변경분을 `승우의 iPhone`과 iPhone 14에 빌드·설치·실행했고 두 기기에서 앱 프로세스가 유지되는 것도 확인했다.
 
@@ -399,10 +409,31 @@ iOS 코드를 수정한 작업은 모두 끝낸 뒤 AGENTS 지침에 따라 `승
 | `3c4ffa6` | 뒷면 마커 상태와 드래그 전환 안정화 |
 | `6213463` | 설정·실행 환경변수·스크립트 기반 DEBUG 도시 테스트 구현 |
 | `0182240` | 기존 카메라를 보존하는 준대척 Route fallback 구현 |
+| `62b2df9` | 화면 충돌을 기준으로 하는 적응형 근거리 카메라 구현 |
+| `a6d5be9` | 초기 framing에 따른 프로필 마커 다리·앵커 분기 |
 | `4ce6fdf` | PR #2 `codex/globe-visual-connections`를 `main`에 병합 |
 | `2c2fd0c` | PR #3 `codex/product-plan-mvp`를 `main`에 병합 |
 
 중간 크롭 실험 커밋(`95b9607`, `fe5becf`, `f28826b`, `76aa126`)은 최종 형태로 가는 과정이다. 현재 HEAD의 코드를 기준으로 판단한다.
+
+## 9-1. `feature/globe-animation` 남은 일 — 2026-08-13
+
+브랜치 커밋: `fd8c114` 하강 애니메이션, `199e340` 문서, `0cac50f` 마커 순서 판정 수정. `main`에 병합하지 않았고 PR도 열지 않았다.
+
+먼저 확인해야 할 것:
+
+1. **기기 실사용 확인 (미완).** `0cac50f` 설치까지 했고 결과는 아직 안 봤다. 두 폰이 서로 다른 계정으로 로그인돼 있으므로 **양쪽 다** 확인한다. 볼 것은 두 가지다. 상단 시계의 좌우 도시가 지도에 그려진 두 프로필의 좌우와 일치하는가, 그리고 프로필 옆 Signal 이모지가 바깥쪽을 향하는가. 둘은 같은 `markerOrder` 값에서 나오므로 하나가 틀리면 둘 다 틀린다.
+2. **하강 중 타일 해상도 (미확인).** 매 프레임 카메라를 직접 커밋하면 MapKit이 경로를 미리 몰라 위성 타일을 선반입하지 못한다. 내려가는 동안 해상도가 계단식으로 튀는지 본다. 튀면 조절 손잡이는 `CameraDive.duration`의 지속 시간이다. 각 해상도 단계에 머무는 시간이 늘어난다.
+3. **속도감 최종 판단 (사용자 확인 대기).** 현재 `clamp(0.95 + 0.62 × ln(배율), 1.0, 2.4)`초다. 한 번 2.2 + 1.15로 늘렸다가 사용자 요청으로 되돌렸다. 착지 여운은 `rampOut`(0.45), 출발 민첩함은 `rampIn`(0.10)이다. `rampIn`은 원래 0.18이었고 시간을 늘렸을 때 줄인 값이 그대로 남아 있다.
+
+건드릴 때 주의:
+
+- 확대가 **발동하는 조건**과 목적지 카메라는 이번 작업에서 하나도 바꾸지 않았다. `artifacts/debug-city-tests/nearby-framing-comparison.md`의 25개 조합 검증이 그대로 유효하다. 조건을 손대면 그 검증부터 다시 한다.
+- 하강 중 `isDivingCamera`로 마커 분류를 얼리는 것을 제거하지 않는다. 최대 257개 투영 probe가 매 프레임 화면을 드나들어, 한 프레임만 잘못 읽어도 보이는 도시가 뒷면으로 판정되어 아바타가 비행 도중 사라진다.
+- 착지 프레임에서 `setCamera`를 부른 **뒤에** 마무리하는 순서를 바꾸지 않는다. 반대로 하면 `beginUserCameraMotion()`이 방금 건 `scheduleBacksideReveal`을 지운다.
+- `MKMapView.camera`가 돌려주는 객체를 고쳐서 목적지를 만들지 않는다. 살아 있는 객체라 출발 카메라까지 같이 바뀌고 하강이 첫 프레임에 끝난다. 원리와 함정 전체는 `docs/camera-dive-animation.md`에 있고, 다른 화면에서 카메라를 움직일 때도 그 문서를 먼저 본다.
+
+알아 둘 것: `iPhone 14` 실기기는 설치 직후 첫 실행이 개발자 프로파일 신뢰 문제(`FBSOpenApplicationErrorDomain error 3`)로 거부될 때가 있다. 몇 초 뒤 재시도하면 통과하고, 계속 막히면 기기에서 설정 → 일반 → VPN 및 기기 관리에서 한 번 신뢰한다.
 
 ## 10. 다음 구현 순서
 
@@ -440,5 +471,7 @@ sed -n '1,240p' docs/next-session-handoff.md
 - 뒷면 마커의 종료 후 3 display frame 안정화와 fade 전환을 실시간 추적으로 되돌리지 않는다.
 - 준대척 fallback의 `> 165°`, Route 축 `< 36°` 조건을 제거해 일반 Route 카메라까지 바꾸지 않는다.
 - 이름·사진·Signal·배터리 갱신 경로에서 카메라 framing을 호출하지 않는다.
+- 카메라 확대·이동을 애니메이션할 때 거리를 선형 보간하지 않는다. 체감 속도는 거리의 로그 변화율이라 앞부분이 멈춘 듯 보이다가 마지막에 꽂힌다. `docs/camera-dive-animation.md`를 따른다.
+- 마커 좌우 순서 판정(`resolveMarkerOrder`)의 불감대를 다시 넓히지 않는다. Route당 한 번만 판정하므로 막을 흔들림이 없고, 넓히면 전 지구 화면에서 가까운 두 도시의 멀쩡한 판정을 버려 시계와 이모지가 반대로 나온다.
 - iOS 수정 완료 후 반드시 `승우의 iPhone`에서 실행한다.
 - 성공한 범위만 커밋하고 다음 기능과 섞지 않는다.
