@@ -331,14 +331,17 @@ struct ContentView: View {
 
     private var isSignalOpen: Bool { route.presented == .signal }
 
-    /// 올라올 때도 내려갈 때도 튕김 없는 스프링을 쓴다.
-    /// 내려갈 때 쓰던 `easeIn`은 0.18초 안에 끝나 프레임 하나만 빠져도 눈에 걸렸고,
-    /// 가속으로 끝나는 곡선이라 마지막이 뚝 끊긴 것처럼 보였다.
+    /// 화면 밖에서 끌어올리는 방식은 한 프레임에 46pt씩 움직인다. 프레임 하나만 빠져도
+    /// 기계가 90pt 넘게 점프해 그대로 눈에 걸린다. 거리를 24pt로 줄이고 나타나는 일은
+    /// 투명도에 맡긴다. 투명도는 값이 건너뛰어도 "틀린 자리"로 보이지 않는다.
     private var signalMachineMotion: Animation {
         isSignalOpen
-            ? .spring(response: 0.36, dampingFraction: 0.92)
-            : .spring(response: 0.30, dampingFraction: 1)
+            ? .easeOut(duration: 0.24)
+            : .easeIn(duration: 0.16)
     }
+
+    /// 떠오르는 높이. 물건이 올라온다는 인상만 남기고 거리는 최소로 둔다.
+    private static let signalMachineRise: CGFloat = 40
 
     /// 기계 밖을 누르면 내려간다. 지구를 가리지 않게 옅게만 덮는다.
     private var signalScrim: some View {
@@ -375,9 +378,10 @@ struct ContentView: View {
             },
             onDismiss: { route = .none }
         )
-        // 닫혀 있을 때는 화면 밖에 그대로 서 있다. 위치만 바뀌므로 여는 프레임에
-        // 뷰 생성이나 텍스처 굽기가 끼어들지 않는다.
-        .offset(y: isSignalOpen ? 0 : SignalPickerSheet.parkedTravel)
+        // 닫혀 있을 때도 제자리에 그대로 서 있다. 여는 프레임에 뷰 생성이나
+        // 텍스처 굽기가 끼어들지 않는다.
+        .offset(y: isSignalOpen ? 0 : Self.signalMachineRise)
+        .opacity(isSignalOpen ? 1 : 0)
         .allowsHitTesting(isSignalOpen)
         .animation(signalMachineMotion, value: isSignalOpen)
     }
