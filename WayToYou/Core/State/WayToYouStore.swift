@@ -142,6 +142,13 @@ final class WayToYouStore {
             partner.city = city
         }
         activeUserID = profile.id
+        // `init(defaults:)`는 아직 역할을 몰라 공용 키에서 읽는다. 역할이 정해진 지금
+        // 다시 읽지 않으면 이 계정이 저장한 기록을 영영 못 읽고 매번 빈 상태로 시작한다.
+        parcels = Self.decode([Parcel].self, from: defaults.data(forKey: storageKey(Key.parcels))) ?? []
+        signals = Self.decode([SignalEvent].self, from: defaults.data(forKey: storageKey(Key.signals))) ?? []
+        signalKeys = Self.signalKeys(from: defaults.data(forKey: storageKey(Key.signalKeys)))
+        heartBursts = Self.decode([HeartBurst].self, from: defaults.data(forKey: storageKey(Key.heartBursts))) ?? []
+
         myProfile = profile
         homeCityID = profile.cityID
         partnerCityID = partner.cityID
