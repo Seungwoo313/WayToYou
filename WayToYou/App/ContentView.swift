@@ -102,10 +102,6 @@ struct ContentView: View {
             .overlay { signalScrim }
             .overlay(alignment: .bottom) { signalMachine }
             .overlay { keycapEditor }
-            // 키캡을 고치는 동안에만 키보드 회피를 끈다. 오버레이 안쪽에 걸면 소용이 없다.
-            // 정렬 기준이 되는 바깥 프레임이 이미 줄어든 뒤라 기계가 통째로 들려 올라간다.
-            // 다른 화면의 입력 칸은 계속 키보드를 피해야 하므로 이때만 끈다.
-            .ignoresSafeArea(.keyboard, edges: editingKeycap == nil ? [] : .bottom)
             .sheet(item: $route.sheetPresented) { destination in
                 sheet(for: destination)
             }
