@@ -340,6 +340,131 @@ struct GlobeMapView: UIViewRepresentable {
         }
     }
 
+    /// 전 지구에서 지역으로 내려가는 동안의 카메라를 매 프레임 계산한다.
+    ///
+    /// 화면에서 느껴지는 확대 속도는 카메라 거리 자체가 아니라 거리의 로그
+    /// 변화율이다. 거리를 선형으로 줄이면 앞의 절반은 거의 멈춘 것처럼 보이다가
+    /// 마지막에 한 번에 꽂히므로, 거리는 항상 기하(로그) 보간한다.
+    private struct CameraDive {
+        /// 가속 구간. 짧게 잡아 첫 프레임부터 움직임이 보이게 한다.
+        private static let rampIn = 0.10
+        /// 감속 구간. 길게 잡아 도착이 "쿵" 멈추지 않고 미끄러지듯 잦아들게 한다.
+        private static let rampOut = 0.45
+        /// 다리를 접는 구간. 하강이 시작된 직후 짧게 끝나야 착지와 겹치지 않는다.
+        private static let legRange = (start: 0.05, end: 0.42)
+
+        let startCenter: SphereVector
+        let targetCenter: SphereVector
+        let startDistance: CLLocationDistance
+        let targetDistance: CLLocationDistance
+        let heading: CLLocationDirection
+        let duration: CFTimeInterval
+        let startTime: CFTimeInterval
+
+        private let centerAngle: Double
+        private let distanceRatio: Double
+
+        init(
+            fromCenter: CLLocationCoordinate2D,
+            fromDistance: CLLocationDistance,
+            to target: MKMapCamera,
+            zoomScale: Double,
+            startTime: CFTimeInterval
+        ) {
+            startCenter = SphereVector(
+                latitude: fromCenter.latitude,
+                longitude: fromCenter.longitude
+            )
+            targetCenter = SphereVector(
+                latitude: target.centerCoordinate.latitude,
+                longitude: target.centerCoordinate.longitude
+            )
+            startDistance = fromDistance
+            targetDistance = target.centerCoordinateDistance
+            heading = target.heading
+            self.startTime = startTime
+
+            centerAngle = startCenter.angularDistance(to: targetCenter)
+            distanceRatio = targetDistance / startDistance
+
+            // 확대 배율이 클수록 지나야 할 거리의 옥타브 수가 늘어난다.
+            // 시간을 배율의 로그에 맞춰 늘려야 어떤 도시 조합에서도 체감 속도가 같다.
+            let octaves = log(max(zoomScale, 1.0001))
+            duration = min(max(0.95 + 0.62 * octaves, 1.0), 2.4)
+        }
+
+        /// 사다리꼴 속도 곡선의 적분. 시작과 끝만 부드럽고 가운데는 등속이라
+        /// ease-in-out 특유의 "한 번 부풀었다 꺼지는" 펌프 감각이 생기지 않는다.
+        private static func easedProgress(_ time: Double) -> Double {
+            let time = min(max(time, 0), 1)
+            let cruise = 1 - rampIn - rampOut
+            let total = rampIn / 2 + cruise + rampOut / 2
+
+            // smoothstep의 0…1 적분값은 정확히 1/2이라 구간 면적이 곧 길이/2다.
+            func rampArea(_ fraction: Double) -> Double {
+                let fraction = min(max(fraction, 0), 1)
+                return fraction * fraction * fraction
+                    - fraction * fraction * fraction * fraction / 2
+            }
+
+            let travelled: Double
+            if time < rampIn {
+                travelled = rampIn * rampArea(time / rampIn)
+            } else if time <= rampIn + cruise {
+                travelled = rampIn / 2 + (time - rampIn)
+            } else {
+                travelled = total - rampOut * rampArea((1 - time) / rampOut)
+            }
+            return min(max(travelled / total, 0), 1)
+        }
+
+        private static func smoothstep(_ value: Double) -> Double {
+            let value = min(max(value, 0), 1)
+            return value * value * (3 - 2 * value)
+        }
+
+        struct Sample {
+            let center: CLLocationCoordinate2D
+            let distance: CLLocationDistance
+            let legProgress: Double
+            let isFinished: Bool
+        }
+
+        func sample(at time: CFTimeInterval) -> Sample {
+            let elapsed = min(max((time - startTime) / duration, 0), 1)
+            let isFinished = elapsed >= 1
+            let progress = Self.easedProgress(elapsed)
+
+            let distance = startDistance * pow(distanceRatio, progress)
+
+            // 같은 각도라도 낮게 내려올수록 화면에서 훨씬 많이 움직인다.
+            // 회전을 높은 곳에서 미리 끝내야 착지 직후에 옆으로 미끄러지지 않는다.
+            let center: CLLocationCoordinate2D
+            if centerAngle > Double.ulpOfOne.squareRoot() {
+                let pan = distanceRatio < 1
+                    ? (1 - pow(distanceRatio, progress)) / (1 - distanceRatio)
+                    : progress
+                center = startCenter
+                    .moved(toward: targetCenter, by: centerAngle * min(max(pan, 0), 1))
+                    .coordinate
+            } else {
+                center = targetCenter.coordinate
+            }
+
+            let legSpan = Self.legRange.end - Self.legRange.start
+            let legProgress = 1 - Self.smoothstep(
+                (elapsed - Self.legRange.start) / legSpan
+            )
+
+            return Sample(
+                center: center,
+                distance: distance,
+                legProgress: legProgress,
+                isFinished: isFinished
+            )
+        }
+    }
+
     struct CameraFraming {
         let first: CoupleCity
         let second: CoupleCity
@@ -520,7 +645,13 @@ struct GlobeMapView: UIViewRepresentable {
         private var nearbyFramingGeneration = 0
         private var nearbyFramingFramesRemaining = 0
         private var nearbyFramingDisplayLink: CADisplayLink?
-        private var showsCoordinateLegsForInitialFraming = true
+        /// 1이면 도시 좌표를 가리키는 다리, 0이면 프로필 중심이 곧 도시 좌표다.
+        /// 하강 중에는 그 사이 값을 지나며 아바타가 다리를 접고 도시에 내려앉는다.
+        private var coordinateLegProgress: Double = 1
+        private var cameraDive: CameraDive?
+        private var cameraDiveDisplayLink: CADisplayLink?
+        private var cameraDiveGeneration = 0
+        private var isDivingCamera = false
         private var backsideRevealFramesRemaining = 0
         private var backsideRevealDisplayLink: CADisplayLink?
         private var isUserCameraMotionActive = false
@@ -584,6 +715,10 @@ struct GlobeMapView: UIViewRepresentable {
             backsideRevealDisplayLink?.invalidate()
             backsideRevealDisplayLink = nil
             backsideRevealFramesRemaining = 0
+            cameraDiveDisplayLink?.invalidate()
+            cameraDiveDisplayLink = nil
+            cameraDive = nil
+            isDivingCamera = false
             isUserCameraMotionActive = false
             markerOrderResolutionScheduled = false
             mapView?.onUsableLayout = nil
@@ -776,7 +911,7 @@ struct GlobeMapView: UIViewRepresentable {
         private func applyCoordinateLegVisibility(in mapView: MKMapView) {
             for annotation in annotationsByID.values {
                 (mapView.view(for: annotation) as? GlobeProfileAnnotationView)?
-                    .setShowsCoordinateLeg(showsCoordinateLegsForInitialFraming)
+                    .setCoordinateLegProgress(coordinateLegProgress)
             }
         }
 
@@ -815,9 +950,13 @@ struct GlobeMapView: UIViewRepresentable {
             in mapView: NativeGlobeMapView,
             fadesInBacksideIndicators: Bool = false
         ) {
+            // 하강 중에는 분류를 얼려 둔다. 257개 probe view가 매 프레임 화면을
+            // 드나들기 때문에, 한 프레임이라도 잘못 읽으면 멀쩡히 보이는 도시가
+            // 뒷면으로 판정되어 아바타가 비행 도중 사라진다.
             guard !needsInitialFraming,
                   !defersMarkerSyncUntilCameraCommit,
                   !isUserCameraMotionActive,
+                  !isDivingCamera,
                   mapView.bounds.width > 0,
                   mapView.bounds.height > 0 else { return }
 
@@ -1265,7 +1404,8 @@ struct GlobeMapView: UIViewRepresentable {
             requestedFraming = framing
             needsInitialFraming = true
             defersMarkerSyncUntilCameraCommit = true
-            showsCoordinateLegsForInitialFraming = true
+            cancelCameraDive(settlingLeg: false)
+            coordinateLegProgress = 1
             markerPlacementDisplayLink?.invalidate()
             markerPlacementDisplayLink = nil
             nearbyFramingDisplayLink?.invalidate()
@@ -1480,19 +1620,154 @@ struct GlobeMapView: UIViewRepresentable {
             let zoomScale = min(requestedGap, safeGapLimit) / currentGap
             guard zoomScale > 1 else { return }
 
-            // 초기 전 지구 화면을 유지하는 Route만 도시 좌표를 가리키는 다리를 쓴다.
-            // 근거리 확대가 실제로 확정되면 프로필 중심이 곧 도시 좌표가 되도록 전환한다.
-            showsCoordinateLegsForInitialFraming = false
-            applyCoordinateLegVisibility(in: mapView)
-            let camera = mapView.camera
-            camera.centerCoordinateDistance /= zoomScale
-            camera.centerCoordinate = route.midpointCoordinate
-            camera.pitch = 0
-            commitNativeMarkersForNearbyFraming(in: mapView)
-            mapView.setCamera(
-                camera,
-                animated: !UIAccessibility.isReduceMotionEnabled
+            // mapView.camera는 매번 새 객체를 준다고 보장되지 않는다. 목적지를
+            // 만들기 전에 출발 값을 먼저 복사해 두지 않으면 둘이 같은 카메라가 되어
+            // 보간 구간이 사라지고 하강이 첫 프레임에 끝나버린다.
+            let startCenter = mapView.camera.centerCoordinate
+            let startDistance = mapView.camera.centerCoordinateDistance
+            let startHeading = mapView.camera.heading
+
+            let camera = MKMapCamera(
+                lookingAtCenter: route.midpointCoordinate,
+                fromDistance: startDistance / Double(zoomScale),
+                pitch: 0,
+                heading: startHeading
             )
+            commitNativeMarkersForNearbyFraming(in: mapView)
+
+            guard !UIAccessibility.isReduceMotionEnabled else {
+                // 초기 전 지구 화면을 유지하는 Route만 도시 좌표를 가리키는 다리를 쓴다.
+                // 근거리 확대가 확정되면 프로필 중심이 곧 도시 좌표가 된다.
+                coordinateLegProgress = 0
+                applyCoordinateLegVisibility(in: mapView)
+                mapView.setCamera(camera, animated: false)
+                return
+            }
+
+            beginCameraDive(
+                from: startCenter,
+                distance: startDistance,
+                to: camera,
+                zoomScale: Double(zoomScale),
+                in: mapView
+            )
+        }
+
+        /// 검증된 목적지 카메라는 그대로 두고, 거기까지 가는 길만 직접 그린다.
+        /// MapKit의 기본 setCamera 애니메이션은 거리를 선형으로 줄여 앞부분이
+        /// 멈춘 듯 보이므로, 매 프레임 로그 보간한 카메라를 직접 커밋한다.
+        private func beginCameraDive(
+            from startCenter: CLLocationCoordinate2D,
+            distance startDistance: CLLocationDistance,
+            to target: MKMapCamera,
+            zoomScale: Double,
+            in mapView: MKMapView
+        ) {
+            guard startDistance.isFinite,
+                  startDistance > 0,
+                  target.centerCoordinateDistance.isFinite,
+                  target.centerCoordinateDistance > 0,
+                  startDistance > target.centerCoordinateDistance,
+                  zoomScale > 1 else {
+                coordinateLegProgress = 0
+                applyCoordinateLegVisibility(in: mapView)
+                mapView.setCamera(target, animated: false)
+                return
+            }
+
+            cameraDiveDisplayLink?.invalidate()
+            cameraDiveGeneration += 1
+
+            // 하강도 카메라가 계속 움직이는 상태다. 선택과 뒷면 표시는 사용자가
+            // 직접 지구를 돌릴 때와 똑같이 정리하고, 착지 후 한 번만 되살린다.
+            beginUserCameraMotion()
+            isDivingCamera = true
+            cameraDive = CameraDive(
+                fromCenter: startCenter,
+                fromDistance: startDistance,
+                to: target,
+                zoomScale: zoomScale,
+                startTime: CACurrentMediaTime()
+            )
+
+            let displayLink = CADisplayLink(
+                target: self,
+                selector: #selector(advanceCameraDive)
+            )
+            cameraDiveDisplayLink = displayLink
+            displayLink.add(to: .main, forMode: .common)
+        }
+
+        @objc private func advanceCameraDive(_ displayLink: CADisplayLink) {
+            guard let mapView, let dive = cameraDive else {
+                cancelCameraDive(settlingLeg: true)
+                return
+            }
+
+            // 손가락이 지구를 잡는 순간 카메라를 넘긴다. 사용자의 조작과
+            // 프로그램 하강이 같은 프레임에서 겹치면 지도가 튄다.
+            guard !hasActiveMapGesture(in: mapView) else {
+                endCameraDiveForUserGesture()
+                return
+            }
+
+            let sample = dive.sample(at: displayLink.targetTimestamp)
+
+            if coordinateLegProgress != sample.legProgress {
+                coordinateLegProgress = sample.legProgress
+                applyCoordinateLegVisibility(in: mapView)
+            }
+
+            // 지도의 살아 있는 카메라를 고쳐 쓰지 않고 매 프레임 새로 만든다.
+            let camera = MKMapCamera(
+                lookingAtCenter: sample.center,
+                fromDistance: sample.distance,
+                pitch: 0,
+                heading: dive.heading
+            )
+            mapView.setCamera(camera, animated: false)
+
+            // setCamera는 delegate를 거쳐 하강을 중단시킬 수 있다. 그 뒤에도
+            // 아직 하강 중일 때만 착지를 확정해야 뒷면 표시 복귀가 지워지지 않는다.
+            guard isDivingCamera, cameraDive != nil, sample.isFinished else { return }
+            finishCameraDive(in: mapView)
+        }
+
+        private func finishCameraDive(in mapView: MKMapView) {
+            cameraDiveDisplayLink?.invalidate()
+            cameraDiveDisplayLink = nil
+            cameraDive = nil
+            cameraDiveGeneration += 1
+            isDivingCamera = false
+
+            coordinateLegProgress = 0
+            applyCoordinateLegVisibility(in: mapView)
+
+            // 마지막 프레임과 목적지의 차이가 너무 작아 MapKit이 region 변경으로
+            // 보지 않을 수 있다. 뒷면 표시 복귀는 delegate에 기대지 않고 직접 건다.
+            scheduleBacksideReveal(afterDisplayFrames: 3)
+        }
+
+        /// 사용자가 지구를 잡으면 하강은 그 자리에서 끝난다. 남은 다리 길이는
+        /// 사용자의 조작이 화면 전체를 움직이는 동안 함께 정리한다.
+        private func endCameraDiveForUserGesture() {
+            cancelCameraDive(settlingLeg: true)
+            cancelNearbyFraming()
+        }
+
+        private func cancelCameraDive(settlingLeg: Bool) {
+            cameraDiveDisplayLink?.invalidate()
+            cameraDiveDisplayLink = nil
+            let wasDiving = cameraDive != nil
+            cameraDive = nil
+            cameraDiveGeneration += 1
+            isDivingCamera = false
+
+            guard wasDiving, settlingLeg else { return }
+            coordinateLegProgress = 0
+            if let mapView {
+                applyCoordinateLegVisibility(in: mapView)
+            }
         }
 
         /// 이전 Route에서 뒷면/숨김이었던 profile도 새 근거리 확대가 시작되기
@@ -1561,7 +1836,7 @@ struct GlobeMapView: UIViewRepresentable {
             guard let profileView = view as? GlobeProfileAnnotationView else { return view }
             profileView.configure(with: annotation.marker)
             profileView.setBacksidePresentation(false)
-            profileView.setShowsCoordinateLeg(showsCoordinateLegsForInitialFraming)
+            profileView.setCoordinateLegProgress(coordinateLegProgress)
             profileView.setSide(markerOrder.wrappedValue.side(for: annotation.id))
             profileView.setCoordinateOffsetX(
                 coincidentCoordinateOffsetX(for: annotation.id)
@@ -1746,7 +2021,11 @@ struct GlobeMapView: UIViewRepresentable {
             regionWillChangeAnimated animated: Bool
         ) {
             if hasActiveMapGesture(in: mapView) {
-                cancelNearbyFraming()
+                endCameraDiveForUserGesture()
+            } else if isDivingCamera {
+                // 하강은 매 프레임 카메라를 커밋하므로 이 delegate도 매 프레임
+                // 불린다. 시작 시 한 번 정리한 상태를 그대로 유지한다.
+                return
             }
             beginUserCameraMotion()
             selection.wrappedValue = nil
@@ -1758,6 +2037,7 @@ struct GlobeMapView: UIViewRepresentable {
 
         func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
             guard let mapView = mapView as? NativeGlobeMapView else { return }
+            guard !isDivingCamera else { return }
             guard isUserCameraMotionActive else {
                 updateMarkerRepresentations(in: mapView)
                 return
@@ -1772,6 +2052,7 @@ struct GlobeMapView: UIViewRepresentable {
             regionDidChangeAnimated animated: Bool
         ) {
             guard let mapView = mapView as? NativeGlobeMapView else { return }
+            guard !isDivingCamera else { return }
             guard isUserCameraMotionActive else {
                 updateMarkerRepresentations(in: mapView)
                 return
@@ -2027,7 +2308,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     private var batteryDisplay: GlobeBatteryDisplay?
     private var markerSide = GlobeMarkerSide.left
     private var isBacksidePresentation = false
-    private var showsCoordinateLeg = true
+    private var coordinateLegProgress: CGFloat = 1
     private var coordinateOffsetX: CGFloat = 0
     private let tapFeedback = UIImpactFeedbackGenerator(style: .medium)
     var onActivate: (() -> Void)?
@@ -2183,15 +2464,20 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         layoutBatteryPill()
 
         let avatarBottom = Layout.avatarTop + Layout.avatarSize
+        // centerOffset이 옮겨 다니는 동안에도 점은 늘 도시 좌표 위에 있어야 한다.
+        // 도시는 캔버스 중심에서 centerOffset만큼 반대로 떨어진 지점이다.
+        let dotCenterY = Layout.canvasSize.height / 2 - centerOffset.y
+        let dotOriginY = dotCenterY - Layout.dotSize / 2
+        let stemTop = avatarBottom - 2
         stemView.frame = CGRect(
             x: bounds.midX - 0.5,
-            y: avatarBottom - 2,
+            y: stemTop,
             width: 1,
-            height: Layout.dotOriginY - avatarBottom + 2
+            height: max(dotOriginY - stemTop, 0)
         )
         dotView.frame = CGRect(
             x: bounds.midX - Layout.dotSize / 2,
-            y: Layout.dotOriginY,
+            y: dotOriginY,
             width: Layout.dotSize,
             height: Layout.dotSize
         )
@@ -2260,7 +2546,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         accessibilityValue = nil
         setBacksidePresentation(false)
         setCoordinateOffsetX(0)
-        setShowsCoordinateLeg(true)
+        setCoordinateLegProgress(1)
         accessibilityTraits = [.button]
         tapFeedback.prepare()
     }
@@ -2276,25 +2562,36 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         updateCenterOffset()
     }
 
-    func setShowsCoordinateLeg(_ showsCoordinateLeg: Bool) {
-        self.showsCoordinateLeg = showsCoordinateLeg
+    /// 1이면 도시를 가리키는 다리, 0이면 아바타 자체가 도시 위에 놓인다.
+    /// 그 사이 값에서는 점이 도시에 붙어 있는 채로 다리만 짧아지고,
+    /// 아바타가 그 위로 내려앉는다.
+    func setCoordinateLegProgress(_ progress: Double) {
+        let clamped = min(max(CGFloat(progress), 0), 1)
+        guard coordinateLegProgress != clamped else { return }
+        coordinateLegProgress = clamped
         updateCoordinateLegVisibility()
         updateCenterOffset()
+        setNeedsLayout()
     }
 
     private func updateCenterOffset() {
-        let verticalOffset = showsCoordinateLeg
-            ? Self.pinCenterOffset.y
-            : Self.avatarCenterOffset.y
+        let verticalOffset = Self.avatarCenterOffset.y
+            + (Self.pinCenterOffset.y - Self.avatarCenterOffset.y)
+            * coordinateLegProgress
         let nextOffset = CGPoint(x: coordinateOffsetX, y: verticalOffset)
         guard centerOffset != nextOffset else { return }
         centerOffset = nextOffset
     }
 
     private func updateCoordinateLegVisibility() {
-        let hidesCoordinateLeg = isBacksidePresentation || !showsCoordinateLeg
+        let hidesCoordinateLeg = isBacksidePresentation || coordinateLegProgress <= 0
         stemView.isHidden = hidesCoordinateLeg
         dotView.isHidden = hidesCoordinateLeg
+        // 다리는 아바타 뒤로 빨려 들어가며 사라진다. 끝까지 또렷하게 두면
+        // 아바타 테두리 밖으로 점이 튀어나온 마지막 프레임이 보인다.
+        let legAlpha = pow(coordinateLegProgress, 0.55)
+        stemView.alpha = legAlpha
+        dotView.alpha = legAlpha
     }
 
     func setBacksidePresentation(_ isBacksidePresentation: Bool) {
