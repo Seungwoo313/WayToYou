@@ -125,11 +125,19 @@ private struct ChassisSurface: View {
     private let shape = RoundedRectangle(cornerRadius: Keypad.chassisRadius, style: .continuous)
 
     var body: some View {
-        shape
-            .fill(Keypad.chassisFill)
-            .overlay { shape.strokeBorder(Keypad.topLightEdge, lineWidth: 1) }
-            .overlay { PlasticGrain().clipShape(shape) }
-            .shadow(color: .black.opacity(0.55), radius: 24, y: 12)
+        ZStack {
+            // 몸통 두께. 아래로 삐져나온 옆면이 있어야 판때기가 아니라 상자로 보인다.
+            shape
+                .fill(Keypad.chassisSideFill)
+                .offset(y: Keypad.chassisThickness)
+                .shadow(color: .black.opacity(0.7), radius: 26, y: 16)
+
+            shape
+                .fill(Keypad.chassisFill)
+                .overlay { shape.strokeBorder(Keypad.topLightEdge, lineWidth: 1.2) }
+                .overlay { PlasticGrain().clipShape(shape) }
+                .shadow(color: .black.opacity(0.35), radius: 6, y: 3)
+        }
     }
 }
 
@@ -201,10 +209,10 @@ private struct DisplayPanel: View {
             readout
             LabelStrip(left: bottomLeft, right: bottomRight)
         }
-        .padding(9)
+        .padding(11)
         .background { glass }
         .overlay { sheen }
-        .overlay { shape.strokeBorder(.black.opacity(0.6), lineWidth: 1) }
+        .overlay { shape.strokeBorder(Keypad.recessEdge, lineWidth: 1.2) }
     }
 
     private var readout: some View {
@@ -223,7 +231,7 @@ private struct DisplayPanel: View {
     private var glass: some View {
         shape
             .fill(Keypad.glass)
-            .innerShadow(radius: Keypad.glassRadius, color: .black.opacity(0.9), width: 5)
+            .innerShadow(radius: Keypad.glassRadius, color: .black.opacity(0.95), width: 8)
     }
 
     /// 유리 위를 비스듬히 지나가는 반사 한 줄.
@@ -427,8 +435,9 @@ private struct KeyWell: View {
         .padding(Keypad.wellPadding)
         .background {
             shape
-                .fill(Keypad.well)
-                .innerShadow(radius: Keypad.wellRadius, color: .black.opacity(0.45), width: 4)
+                .fill(Keypad.wellFill)
+                .innerShadow(radius: Keypad.wellRadius, color: .black.opacity(0.6), width: 8)
+                .overlay { shape.strokeBorder(Keypad.recessEdge, lineWidth: 1.2) }
         }
     }
 }
@@ -449,11 +458,13 @@ private struct KeycapFace: View {
 
     var body: some View {
         ZStack(alignment: .top) {
+            // 키캡 옆면. 빛이 왼쪽 위에서 오니까 왼쪽 벽이 밝고 오른쪽 아래가 어둡다.
             RoundedRectangle(cornerRadius: Keypad.keyRadius, style: .continuous)
                 .fill(Keypad.skirtFill)
+                .shadow(color: .black.opacity(0.55), radius: 4, y: 3)
 
             cap
-                .padding(.horizontal, 3)
+                .padding(.horizontal, Keypad.keyInset)
                 .padding(.top, sink)
                 .padding(.bottom, Keypad.keyDepth - sink)
         }
@@ -466,8 +477,13 @@ private struct KeycapFace: View {
         shape
             .fill(Keypad.capFill)
             .overlay { dish }
-            .overlay { shape.strokeBorder(Keypad.capEdge, lineWidth: 1) }
-            .overlay { Text(emoji).font(.system(size: Keypad.emojiSize)) }
+            .overlay(alignment: .top) { specular }
+            .overlay { shape.strokeBorder(Keypad.capEdge, lineWidth: 1.2) }
+            .overlay {
+                Text(emoji)
+                    .font(.system(size: Keypad.emojiSize))
+                    .shadow(color: .black.opacity(0.45), radius: 2, y: 1.5)
+            }
             .overlay(alignment: .topTrailing) { activeLamp }
             .overlay { PlasticGrain().clipShape(shape) }
     }
@@ -475,6 +491,22 @@ private struct KeycapFace: View {
     /// 손가락이 닿는 면은 살짝 파여 있다.
     private var dish: some View {
         shape.fill(Keypad.capDish)
+    }
+
+    /// 윗면이 받는 반사. 위쪽 절반에만 얹어야 면이 휘어 보인다.
+    private var specular: some View {
+        UnevenRoundedRectangle(
+            topLeadingRadius: Keypad.keyRadius - 2,
+            bottomLeadingRadius: 2,
+            bottomTrailingRadius: 2,
+            topTrailingRadius: Keypad.keyRadius - 2,
+            style: .continuous
+        )
+        .fill(Keypad.capSpecular)
+        .padding(.horizontal, 1)
+        .padding(.top, 1)
+        .frame(maxHeight: 26, alignment: .top)
+        .allowsHitTesting(false)
     }
 
     @ViewBuilder
@@ -560,9 +592,11 @@ private enum Keypad {
     static let glassRadius: CGFloat = 12
     static let wellRadius: CGFloat = 16
     static let wellPadding: CGFloat = 10
-    static let keyGap: CGFloat = 8
-    static let keyRadius: CGFloat = 12
-    static let keyDepth: CGFloat = 7
+    static let keyGap: CGFloat = 9
+    static let keyRadius: CGFloat = 13
+    static let keyDepth: CGFloat = 10
+    static let keyInset: CGFloat = 4
+    static let chassisThickness: CGFloat = 9
     static let emojiSize: CGFloat = 38
     static let digitWidth: CGFloat = 25
     static let digitHeight: CGFloat = 42
@@ -571,13 +605,38 @@ private enum Keypad {
     static let ledDim = Color(red: 0.90, green: 0.55, blue: 0.06)
     static let ledOff = Color(red: 0.20, green: 0.105, blue: 0.012)
     static let glass = Color(red: 0.045, green: 0.038, blue: 0.030)
-    static let well = Color(red: 0.700, green: 0.688, blue: 0.660)
     static let gearWell = Color(red: 0.760, green: 0.748, blue: 0.720)
     static let engraved = Color(red: 0.38, green: 0.37, blue: 0.35)
     static let engravedFaint = Color(red: 0.55, green: 0.54, blue: 0.52)
 
     static let chassisFill = LinearGradient(
         colors: [Color(red: 0.945, green: 0.935, blue: 0.910), Color(red: 0.820, green: 0.808, blue: 0.780)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+
+    /// 우물 바닥. 위가 어둡고 아래가 밝아야 안으로 파인 것처럼 보인다.
+    static let wellFill = LinearGradient(
+        colors: [Color(red: 0.560, green: 0.548, blue: 0.522), Color(red: 0.735, green: 0.722, blue: 0.694)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+
+    static let chassisSideFill = LinearGradient(
+        colors: [Color(red: 0.600, green: 0.588, blue: 0.562), Color(red: 0.430, green: 0.420, blue: 0.400)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+
+    /// 파인 자리의 테두리. 위쪽은 그늘, 아래쪽은 빛을 받는다.
+    static let recessEdge = LinearGradient(
+        colors: [.black.opacity(0.65), .white.opacity(0.35)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+
+    static let capSpecular = LinearGradient(
+        colors: [.white.opacity(0.16), .white.opacity(0.02), .clear],
         startPoint: .top,
         endPoint: .bottom
     )
@@ -589,9 +648,13 @@ private enum Keypad {
     )
 
     static let skirtFill = LinearGradient(
-        colors: [Color(red: 0.130, green: 0.127, blue: 0.124), Color(red: 0.075, green: 0.073, blue: 0.070)],
-        startPoint: .top,
-        endPoint: .bottom
+        colors: [
+            Color(red: 0.185, green: 0.180, blue: 0.176),
+            Color(red: 0.105, green: 0.102, blue: 0.099),
+            Color(red: 0.055, green: 0.053, blue: 0.051)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
     )
 
     /// 어두운 키캡에는 흰 하이라이트를 몸통만큼 세게 주면 플라스틱이 아니라 유리처럼 보인다.
