@@ -113,6 +113,7 @@ struct SettingsView: View {
     @State private var presentedSetting: PresentedSetting?
     /// 하트 고르기를 열 때의 값. 닫을 때와 다를 때만 올린다.
     @State private var routeHeartEmojiOnOpen: RouteHeartEmoji?
+    @State private var routeHeartToastID: UUID?
 
     private enum PresentedSetting: String, Identifiable {
         case time
@@ -154,12 +155,40 @@ struct SettingsView: View {
                     }
                     .padding(Metric.screenPadding)
                 }
+
+                if let routeHeartToastID {
+                    ProfileAvatarSuccessToast(message: "하트가 변경되었어요!")
+                        .id(routeHeartToastID)
+                        .padding(.horizontal, Metric.screenPadding)
+                        .padding(.top, Metric.s)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .transition(
+                            .move(edge: .top)
+                                .combined(with: .opacity)
+                                .combined(with: .scale(scale: 0.96, anchor: .top))
+                        )
+                        .zIndex(10)
+                }
             }
             .navigationTitle("설정")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.hidden, for: .navigationBar)
             .sheet(item: $presentedSetting, onDismiss: finishRouteHeartEdit) { setting in
                 settingSheet(setting)
+            }
+            .task(id: routeHeartToastID) {
+                guard let toastID = routeHeartToastID else { return }
+
+                do {
+                    try await Task.sleep(for: .seconds(2.1))
+                } catch {
+                    return
+                }
+
+                guard routeHeartToastID == toastID else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    routeHeartToastID = nil
+                }
             }
             #if DEBUG
             .onAppear {
@@ -468,7 +497,14 @@ struct SettingsView: View {
         routeHeartEmojiOnOpen = nil
         guard previous != routeHeartEmoji else { return }
 
-        Task { await store.pushRouteHeartEmoji() }
+        Task {
+            let didShare = await store.pushRouteHeartEmoji()
+            // 연결 전이라면 올릴 곳이 없을 뿐, 고른 하트는 이미 내 지구본에 적용됐다.
+            guard didShare || !store.isConnected else { return }
+            withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
+                routeHeartToastID = UUID()
+            }
+        }
     }
 
     private func save(city: RouteCity) {
