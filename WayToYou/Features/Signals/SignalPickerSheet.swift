@@ -274,15 +274,7 @@ private struct DisplayPanel: View {
             if let editingTitle {
                 LedTag(text: editingTitle)
             } else {
-                HStack(alignment: .center, spacing: 5) {
-                    SevenSegmentReadout(
-                        text: distance,
-                        digitWidth: 10,
-                        digitHeight: 16,
-                        spacing: 2.5
-                    )
-                    LedTag(text: "KM")
-                }
+                LedTag(text: "\(distance) KM")
             }
             Spacer(minLength: 8)
             LedTag(text: topRight)
@@ -296,10 +288,12 @@ private struct DisplayPanel: View {
                 Text(stagedEmoji)
                     .font(.system(size: 46))
             } else {
-                Text("NO SIGNAL")
-                    .font(.system(size: 26, weight: .black, design: .monospaced))
-                    .tracking(2)
-                    .foregroundStyle(Keypad.ledDim)
+                SevenSegmentReadout(
+                    text: "NO SIGNAL",
+                    digitWidth: 21,
+                    digitHeight: Keypad.digitHeight,
+                    spacing: 4
+                )
             }
         }
         .frame(maxWidth: .infinity)
@@ -359,12 +353,16 @@ private struct SevenSegmentReadout: View {
     var body: some View {
         HStack(spacing: spacing) {
             ForEach(Array(text.enumerated()), id: \.offset) { _, character in
-                if let value = character.wholeNumberValue {
-                    SevenSegmentDigit(value: value)
-                        .frame(width: digitWidth, height: digitHeight)
-                } else {
+                switch character {
+                case ":":
                     Colon()
                         .frame(width: digitWidth * 0.28, height: digitHeight)
+                case " ":
+                    Color.clear
+                        .frame(width: digitWidth * 0.5, height: digitHeight)
+                default:
+                    SevenSegmentDigit(character: character)
+                        .frame(width: digitWidth, height: digitHeight)
                 }
             }
         }
@@ -373,7 +371,7 @@ private struct SevenSegmentReadout: View {
 
 /// 꺼진 획도 어둡게 남겨 둔다. 진짜 계산기는 `88:88`이 유령처럼 비쳐 보인다.
 private struct SevenSegmentDigit: View {
-    let value: Int
+    let character: Character
 
     var body: some View {
         segments(onlyLit: false)
@@ -382,7 +380,7 @@ private struct SevenSegmentDigit: View {
 
     private func segments(onlyLit: Bool) -> some View {
         Canvas { context, size in
-            let lit = SegmentGeometry.mask(for: value)
+            let lit = SegmentGeometry.mask(for: character)
             for index in 0..<7 {
                 let isLit = lit.contains(index)
                 if onlyLit && !isLit { continue }
@@ -420,18 +418,29 @@ private struct Colon: View {
 
 private enum SegmentGeometry {
     /// 0 a · 1 b · 2 c · 3 d · 4 e · 5 f · 6 g
-    static func mask(for value: Int) -> Set<Int> {
-        switch value {
-        case 0: [0, 1, 2, 3, 4, 5]
-        case 1: [1, 2]
-        case 2: [0, 1, 6, 4, 3]
-        case 3: [0, 1, 6, 2, 3]
-        case 4: [5, 6, 1, 2]
-        case 5: [0, 5, 6, 2, 3]
-        case 6: [0, 5, 6, 4, 2, 3]
-        case 7: [0, 1, 2]
-        case 8: [0, 1, 2, 3, 4, 5, 6]
-        case 9: [0, 1, 2, 3, 5, 6]
+    ///
+    /// 일곱 획으로 글자도 쓸 수 있다. 실제 계산기와 안내판이 쓰던 방식이라
+    /// 숫자와 같은 서체로 `NO SIGNAL`을 띄울 수 있다.
+    static func mask(for character: Character) -> Set<Int> {
+        switch character {
+        case "0": [0, 1, 2, 3, 4, 5]
+        case "1": [1, 2]
+        case "2": [0, 1, 6, 4, 3]
+        case "3": [0, 1, 6, 2, 3]
+        case "4": [5, 6, 1, 2]
+        case "5": [0, 5, 6, 2, 3]
+        case "6": [0, 5, 6, 4, 2, 3]
+        case "7": [0, 1, 2]
+        case "8": [0, 1, 2, 3, 4, 5, 6]
+        case "9": [0, 1, 2, 3, 5, 6]
+        case "A": [0, 1, 2, 4, 5, 6]
+        case "G": [0, 2, 3, 4, 5]
+        case "I": [1, 2]
+        case "L": [3, 4, 5]
+        // 대문자 N은 획이 O와 거의 같아 구분이 안 된다. 계산기가 쓰는 소문자 n을 쓴다.
+        case "N": [2, 4, 6]
+        case "O": [0, 1, 2, 3, 4, 5]
+        case "S": [0, 5, 6, 2, 3]
         default: []
         }
     }
