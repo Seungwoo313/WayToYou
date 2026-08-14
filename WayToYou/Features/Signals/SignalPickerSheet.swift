@@ -49,9 +49,9 @@ struct SignalPickerSheet: View {
             Nameplate(isEditing: isEditingKeys, onToggleEditing: toggleEditing)
 
             DisplayPanel(
-                value: distanceDigits,
+                distance: distanceDigits,
                 stagedEmoji: stagedSignal?.emoji,
-                topLeft: isEditingKeys ? "EDIT" : "KM",
+                editingTitle: isEditingKeys ? "EDIT" : nil,
                 topRight: isEditingKeys ? "KEYS" : partnerName,
                 bottomLeft: isEditingKeys ? "EMOJI" : partnerClock,
                 bottomRight: isEditingKeys ? "+ LABEL" : partnerCityName
@@ -244,10 +244,11 @@ private struct GearButton: View {
 // MARK: - 디스플레이
 
 private struct DisplayPanel: View {
-    let value: String
-    /// 고른 신호가 있으면 단위 자리에 그 이모지가 대신 뜬다.
+    let distance: String
+    /// 고른 신호가 있으면 큰 자리에 그 이모지가 뜬다. 없으면 `NO SIGNAL`.
     let stagedEmoji: String?
-    let topLeft: String
+    /// 편집 중에는 거리 대신 안내가 그 자리에 들어간다.
+    let editingTitle: String?
     let topRight: String
     let bottomLeft: String
     let bottomRight: String
@@ -256,7 +257,7 @@ private struct DisplayPanel: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            LabelStrip(left: topLeft, right: topRight)
+            topStrip
             readout
             LabelStrip(left: bottomLeft, right: bottomRight)
         }
@@ -266,30 +267,43 @@ private struct DisplayPanel: View {
         .overlay { shape.strokeBorder(Keypad.recessEdge, lineWidth: 1.2) }
     }
 
-    private var readout: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            SevenSegmentReadout(text: value)
-            trailing
+    /// 거리는 이 기계의 주인공 자리에서 물러나 모서리로 갔다.
+    /// 작은 7세그먼트로 두어 계산기다운 결은 남긴다.
+    private var topStrip: some View {
+        HStack(spacing: 5) {
+            if let editingTitle {
+                LedTag(text: editingTitle)
+            } else {
+                HStack(alignment: .center, spacing: 5) {
+                    SevenSegmentReadout(
+                        text: distance,
+                        digitWidth: 10,
+                        digitHeight: 16,
+                        spacing: 2.5
+                    )
+                    LedTag(text: "KM")
+                }
+            }
+            Spacer(minLength: 8)
+            LedTag(text: topRight)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 2)
     }
 
-    @ViewBuilder
-    private var trailing: some View {
-        if let stagedEmoji {
-            Text(stagedEmoji)
-                .font(.system(size: 30))
-                .padding(.bottom, 2)
-        } else {
-            Text("NO\nSIGNAL")
-                .font(.system(size: 11, weight: .black, design: .monospaced))
-                .tracking(1)
-                .lineSpacing(-1)
-                .multilineTextAlignment(.leading)
-                .foregroundStyle(Keypad.ledDim)
-                .padding(.bottom, 3)
+    /// 창의 가장 큰 자리는 지금 무엇을 보내려는지에 내준다.
+    private var readout: some View {
+        Group {
+            if let stagedEmoji {
+                Text(stagedEmoji)
+                    .font(.system(size: 46))
+            } else {
+                Text("NO SIGNAL")
+                    .font(.system(size: 26, weight: .black, design: .monospaced))
+                    .tracking(2)
+                    .foregroundStyle(Keypad.ledDim)
+            }
         }
+        .frame(maxWidth: .infinity)
+        .frame(height: Keypad.digitHeight + 8)
     }
 
     private var glass: some View {
@@ -313,16 +327,20 @@ private struct LabelStrip: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            tag(left)
+            LedTag(text: left)
             Spacer(minLength: 8)
             if !right.isEmpty {
-                tag(right)
+                LedTag(text: right)
             }
         }
     }
+}
 
-    /// 역 안내판처럼 검은 판 위에서 글자 자체가 빛난다. 칠한 칩을 두면 종이 라벨로 보인다.
-    private func tag(_ text: String) -> some View {
+/// 역 안내판처럼 검은 판 위에서 글자 자체가 빛난다. 칠한 칩을 두면 종이 라벨로 보인다.
+private struct LedTag: View {
+    let text: String
+
+    var body: some View {
         Text(text.uppercased())
             .font(.system(size: 11, weight: .bold, design: .monospaced))
             .tracking(1.4)
@@ -334,16 +352,19 @@ private struct LabelStrip: View {
 
 private struct SevenSegmentReadout: View {
     let text: String
+    var digitWidth: CGFloat = Keypad.digitWidth
+    var digitHeight: CGFloat = Keypad.digitHeight
+    var spacing: CGFloat = 5
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: spacing) {
             ForEach(Array(text.enumerated()), id: \.offset) { _, character in
                 if let value = character.wholeNumberValue {
                     SevenSegmentDigit(value: value)
-                        .frame(width: Keypad.digitWidth, height: Keypad.digitHeight)
+                        .frame(width: digitWidth, height: digitHeight)
                 } else {
                     Colon()
-                        .frame(width: 7, height: Keypad.digitHeight)
+                        .frame(width: digitWidth * 0.28, height: digitHeight)
                 }
             }
         }
