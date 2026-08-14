@@ -16,6 +16,9 @@ final class WayToYouStore {
     /// Signal 키패드의 키캡 9개. 사용자마다 다르고 서버에 올리지 않는다.
     private(set) var signalKeys: [SignalKey]
     private(set) var heartBursts: [HeartBurst]
+    /// 경로 한가운데서 뛰는 하트. 키캡과 달리 연결에 달려 있어 두 사람이 같은 것을 본다.
+    /// 서버 값이 정답이고 여기 있는 것은 그릴 때 기다리지 않으려고 들고 있는 사본이다.
+    private(set) var routeHeartEmoji: String
     private(set) var backendIsReady = false
     private(set) var connectionIsWorking = false
     private(set) var connectionMessage: String?
@@ -61,6 +64,8 @@ final class WayToYouStore {
     private var backendConnectionService: SupabaseConnectionService?
     private var activeUserID: UUID?
     private var hasSyncedHearts = false
+    /// 하트를 올리는 중에 도착한 연결 상태는 아직 옛 값을 들고 있어 그대로 받으면 안 된다.
+    private var routeHeartPushIsInFlight = false
     private var hasSyncedSignals = false
     private var avatarRevisionByUserID: [UUID: String] = [:]
     private var lastPublishedBatteryReading: DeviceBatteryReading?
@@ -78,8 +83,16 @@ final class WayToYouStore {
         static let signals = "wty.signals"
         static let signalKeys = "wty.signalKeys"
         static let heartBursts = "wty.heartBursts"
+        static let routeHeartEmoji = "wty.routeHeartEmoji"
         static let demoMode = "wty.demoMode"
     }
+
+    /// `RouteHeartEmoji.pink`. Core가 화면 쪽 enum을 올려다보지 않으려고 값만 둔다.
+    static let defaultRouteHeartEmoji = "🩷"
+
+    /// 공유되기 전에는 이 기기에만 있던 설정이라 `@AppStorage`가 쓰던 키에 남아 있다.
+    /// 처음 한 번은 그 값을 이어받아, 쓰던 하트가 분홍으로 되돌아가지 않게 한다.
+    private static let legacyRouteHeartEmojiKey = "routeHeartEmoji"
 
     /// 데모 모드 타이밍. 실제 모드에서는 거리 기반 시간을 그대로 쓴다.
     private enum Demo {
@@ -114,6 +127,7 @@ final class WayToYouStore {
         signals = Self.decode([SignalEvent].self, from: defaults.data(forKey: Key.signals)) ?? []
         signalKeys = Self.signalKeys(from: defaults.data(forKey: Key.signalKeys))
         heartBursts = Self.decode([HeartBurst].self, from: defaults.data(forKey: Key.heartBursts)) ?? []
+        routeHeartEmoji = Self.routeHeartEmoji(in: defaults, forKey: Key.routeHeartEmoji)
 
         if let myProfile {
             homeCityID = myProfile.cityID
@@ -148,6 +162,7 @@ final class WayToYouStore {
         signals = Self.decode([SignalEvent].self, from: defaults.data(forKey: storageKey(Key.signals))) ?? []
         signalKeys = Self.signalKeys(from: defaults.data(forKey: storageKey(Key.signalKeys)))
         heartBursts = Self.decode([HeartBurst].self, from: defaults.data(forKey: storageKey(Key.heartBursts))) ?? []
+        routeHeartEmoji = Self.routeHeartEmoji(in: defaults, forKey: storageKey(Key.routeHeartEmoji))
 
         myProfile = profile
         homeCityID = profile.cityID
@@ -567,6 +582,37 @@ final class WayToYouStore {
         save()
     }
 
+    /// 고른 즉시 지구본에 반영한다. 서버 왕복을 기다리면 하트를 넘길 때마다 화면이 멎는다.
+    /// 실제로 두 사람에게 공유되는 것은 `pushRouteHeartEmoji()`가 성공했을 때다.
+    func setRouteHeartEmoji(_ emoji: String) {
+        guard routeHeartEmoji != emoji else { return }
+        routeHeartEmoji = emoji
+        save()
+    }
+
+    /// 지금 골라 둔 하트를 연결에 올린다. 연결 전이라면 이 기기에만 남는다.
+    @discardableResult
+    func pushRouteHeartEmoji() async -> Bool {
+        #if DEBUG
+        if debugAccount != nil { return true }
+        #endif
+        guard isConnected, let backendConnectionService else { return false }
+
+        heartMessage = nil
+        routeHeartPushIsInFlight = true
+        defer { routeHeartPushIsInFlight = false }
+
+        do {
+            let remote = try await backendConnectionService.setRouteHeartEmoji(routeHeartEmoji)
+            routeHeartEmoji = remote.routeHeartEmoji
+            save()
+            return true
+        } catch {
+            heartMessage = Self.friendlyHeartError(error)
+            return false
+        }
+    }
+
     /// 키패드 한 칸을 바꾼다. 같은 이모지가 다른 칸에 이미 있으면 두 칸을 맞바꿔 중복을 막는다.
     func setSignalKey(_ key: SignalKey, at index: Int) {
         guard signalKeys.indices.contains(index), signalKeys[index] != key else { return }
@@ -920,6 +966,7 @@ final class WayToYouStore {
         defaults.set(Self.encode(signals), forKey: storageKey(Key.signals))
         defaults.set(Self.encode(signalKeys), forKey: storageKey(Key.signalKeys))
         defaults.set(Self.encode(heartBursts), forKey: storageKey(Key.heartBursts))
+        defaults.set(routeHeartEmoji, forKey: storageKey(Key.routeHeartEmoji))
     }
 
     /// 저장된 키캡이 없거나 개수가 어긋나면 출고 배열로 채운다.
@@ -927,6 +974,17 @@ final class WayToYouStore {
         guard let stored = decode([SignalKey].self, from: data),
               stored.count == SignalKey.count else { return SignalKey.defaults }
         return stored
+    }
+
+    /// 공유 이전에 이 기기가 혼자 쓰던 하트를 한 번 이어받는다.
+    private static func routeHeartEmoji(in defaults: UserDefaults, forKey key: String) -> String {
+        if let stored = defaults.string(forKey: key), !stored.isEmpty {
+            return stored
+        }
+        if let legacy = defaults.string(forKey: legacyRouteHeartEmojiKey), !legacy.isEmpty {
+            return legacy
+        }
+        return defaultRouteHeartEmoji
     }
 
     private static func encode<T: Encodable>(_ value: T) -> Data? {
@@ -1023,6 +1081,13 @@ final class WayToYouStore {
                     connectedAt: connectedAt
                 )
             )
+            // 올리는 중에 새로고침이 겹치면 서버는 아직 옛 하트를 들고 있다.
+            // 그대로 받으면 방금 고른 것이 잠깐 되돌아갔다가 다시 바뀐다.
+            if let remoteHeart = state.routeHeartEmoji,
+               !remoteHeart.isEmpty,
+               !routeHeartPushIsInFlight {
+                routeHeartEmoji = remoteHeart
+            }
 
         case "inviting":
             if case .inviting(let localInvite) = connectionStatus,

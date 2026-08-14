@@ -27,10 +27,10 @@ struct ContentView: View {
         ClockDisplayFormat.twentyFourHour.rawValue
     @AppStorage("temperatureUnit") private var temperatureUnitRawValue =
         TemperatureUnit.celsius.rawValue
+    // 보일지, 뛸지는 이 기기의 취향이라 기기에 남는다.
+    // 어떤 하트인지만 연결에 올라가 두 사람이 같은 것을 본다.
     @AppStorage("showsRouteHeart") private var showsRouteHeart = true
     @AppStorage("animatesRouteHeart") private var animatesRouteHeart = true
-    @AppStorage("routeHeartEmoji") private var routeHeartEmojiRawValue =
-        RouteHeartEmoji.pink.rawValue
     @Environment(\.scenePhase) private var scenePhase
     #if DEBUG
     private let debugAccount: DebugAccount?
@@ -307,13 +307,13 @@ struct ContentView: View {
     }
 
     private var routeHeartEmoji: RouteHeartEmoji {
-        RouteHeartEmoji(rawValue: routeHeartEmojiRawValue) ?? .pink
+        RouteHeartEmoji(rawValue: store.routeHeartEmoji) ?? .pink
     }
 
     private var routeHeartEmojiBinding: Binding<RouteHeartEmoji> {
         Binding(
             get: { routeHeartEmoji },
-            set: { routeHeartEmojiRawValue = $0.rawValue }
+            set: { store.setRouteHeartEmoji($0.rawValue) }
         )
     }
 

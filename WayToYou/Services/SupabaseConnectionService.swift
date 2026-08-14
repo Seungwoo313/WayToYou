@@ -39,6 +39,8 @@ struct RemoteConnectionState: Decodable {
     let connectedAt: Date?
     let inviteID: UUID?
     let inviteExpiresAt: Date?
+    /// 연결된 상태에서만 실린다. 아직 마이그레이션 전인 서버는 이 칸을 비워 보낸다.
+    let routeHeartEmoji: String?
     let error: String?
 
     enum CodingKeys: String, CodingKey {
@@ -47,6 +49,15 @@ struct RemoteConnectionState: Decodable {
         case connectedAt = "connected_at"
         case inviteID = "invite_id"
         case inviteExpiresAt = "invite_expires_at"
+        case routeHeartEmoji = "route_heart_emoji"
+    }
+}
+
+struct RemoteRouteHeart: Decodable {
+    let routeHeartEmoji: String
+
+    enum CodingKeys: String, CodingKey {
+        case routeHeartEmoji = "route_heart_emoji"
     }
 }
 
@@ -222,6 +233,15 @@ struct SupabaseConnectionService {
         struct Parameters: Encodable { let p_limit: Int }
         return try await client
             .rpc("wty_list_signals", params: Parameters(p_limit: limit))
+            .execute()
+            .value
+    }
+
+    /// 경로 하트는 연결에 달려 있어 어느 쪽이 바꾸든 두 사람 모두에게 반영된다.
+    func setRouteHeartEmoji(_ emoji: String) async throws -> RemoteRouteHeart {
+        struct Parameters: Encodable { let p_emoji: String }
+        return try await client
+            .rpc("wty_set_route_heart_emoji", params: Parameters(p_emoji: emoji))
             .execute()
             .value
     }
