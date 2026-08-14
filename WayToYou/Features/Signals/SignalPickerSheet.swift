@@ -31,6 +31,8 @@ struct SignalPickerSheet: View {
     /// 키를 누르면 눌리기만 하고, 보내는 것은 엔터가 맡는다.
     /// 기계는 늘 아무것도 눌리지 않은 채로 열린다. 지난번에 보낸 것은 이미 지구본 위에 있다.
     @State private var stagedSignal: CoupleSignal?
+    /// 보낸 직후 창에 확인이 뜨는 동안. 이 사이엔 키가 안 먹는다.
+    @State private var isConfirming = false
 
     var body: some View {
         machine
@@ -39,6 +41,7 @@ struct SignalPickerSheet: View {
             .onChange(of: isPresented) { _, presented in
                 if !presented {
                     stagedSignal = nil
+                    isConfirming = false
                     isEditingKeys = false
                 }
             }
@@ -50,7 +53,8 @@ struct SignalPickerSheet: View {
 
             DisplayPanel(
                 distance: distanceDigits,
-                stagedEmoji: stagedSignal?.emoji,
+                stagedEmoji: isConfirming ? nil : stagedSignal?.emoji,
+                confirmation: isConfirming ? "SIGNAL SENT" : nil,
                 editingTitle: isEditingKeys ? "EDIT" : nil,
                 topRight: isEditingKeys ? "KEYS" : partnerName,
                 bottomLeft: isEditingKeys ? "EMOJI" : partnerClock,
@@ -61,7 +65,7 @@ struct SignalPickerSheet: View {
                 keys: keys,
                 activeSignal: stagedSignal,
                 isEditing: isEditingKeys,
-                canSend: stagedSignal != nil,
+                canSend: stagedSignal != nil && !isConfirming,
                 onStage: stage,
                 onSend: send,
                 onEdit: onEditKey
@@ -110,14 +114,19 @@ struct SignalPickerSheet: View {
         stagedSignal = stagedSignal == signal ? nil : signal
     }
 
-    /// 엔터를 눌러야 실제로 나간다. 고른 것이 없으면 그냥 내려간다.
+    /// 엔터를 눌러야 실제로 나간다. 신호는 만료로 알아서 꺼지므로 끄는 키는 두지 않는다.
+    /// 보낸 뒤 곧바로 내려가면 무엇을 했는지 모르므로 확인을 한 박자 보여준다.
     private func send() {
-        guard let stagedSignal else {
-            onDismiss()
-            return
-        }
-        self.stagedSignal = nil
+        guard let stagedSignal, !isConfirming else { return }
+        isConfirming = true
         onSelect(stagedSignal)
+
+        Task {
+            try? await Task.sleep(for: .milliseconds(700))
+            self.stagedSignal = nil
+            isConfirming = false
+            onDismiss()
+        }
     }
 
     /// 큰 숫자는 두 도시 사이 거리다. 이 기계가 켜져 있는 이유 그 자체라 시각보다 앞에 둔다.
@@ -247,6 +256,8 @@ private struct DisplayPanel: View {
     let distance: String
     /// 고른 신호가 있으면 큰 자리에 그 이모지가 뜬다. 없으면 `NO SIGNAL`.
     let stagedEmoji: String?
+    /// 보낸 직후 한 박자 동안 그 자리를 차지하는 확인 문구.
+    let confirmation: String?
     /// 편집 중에는 거리 대신 안내가 그 자리에 들어간다.
     let editingTitle: String?
     let topRight: String
@@ -284,16 +295,21 @@ private struct DisplayPanel: View {
     /// 창의 가장 큰 자리는 지금 무엇을 보내려는지에 내준다.
     private var readout: some View {
         Group {
-            if let stagedEmoji {
+            if let confirmation {
+                Text(confirmation)
+                    .font(.system(size: 27, weight: .black, design: .monospaced))
+                    .tracking(2.5)
+                    .foregroundStyle(Keypad.led)
+            } else if let stagedEmoji {
                 Text(stagedEmoji)
                     .font(.system(size: 46))
             } else {
-                SevenSegmentReadout(
-                    text: "NO SIGNAL",
-                    digitWidth: 21,
-                    digitHeight: Keypad.digitHeight,
-                    spacing: 4
-                )
+                // 일곱 획으로 글자도 쓸 수 있지만 S와 5, G와 6이 같은 모양이라 읽히지 않는다.
+                // 숫자만 획으로 그리고 글자는 모노로 둔다. 색과 크기는 같은 창의 것을 쓴다.
+                Text("NO SIGNAL")
+                    .font(.system(size: 27, weight: .black, design: .monospaced))
+                    .tracking(2.5)
+                    .foregroundStyle(Keypad.ledDim)
             }
         }
         .frame(maxWidth: .infinity)
@@ -560,13 +576,15 @@ private struct KeyWell: View {
     }
 
     /// 누른 신호는 눌린 채로 남고, 실제로 나가는 것은 이 키를 눌렀을 때다.
+    /// 고른 것이 없으면 누를 수 없다. 신호는 만료로 꺼지므로 끄는 용도로 쓸 일이 없다.
     private var enterKey: some View {
         Button(action: onSend) {
             EnterKeyFace(isArmed: canSend)
         }
         .buttonStyle(KeycapPress())
+        .disabled(!canSend)
         .accessibilityLabel("보내기")
-        .accessibilityHint(canSend ? "고른 Signal을 보내요" : "기계를 닫아요")
+        .accessibilityHint("고른 Signal을 보내요")
     }
 }
 

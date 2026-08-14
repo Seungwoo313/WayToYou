@@ -384,9 +384,9 @@ struct ContentView: View {
                 at: now
             ),
             distanceKilometers: store.distanceKilometers,
+            // 내려가는 것은 기계가 확인을 한 박자 보여준 뒤 스스로 한다.
             onSelect: { signal in
-                route = .none
-                UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
                 Task { _ = await store.sendSignal(signal) }
             },
             onEditKey: { index in
