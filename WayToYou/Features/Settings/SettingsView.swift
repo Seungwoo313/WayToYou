@@ -111,6 +111,9 @@ struct SettingsView: View {
     @Binding var routeHeartEmoji: RouteHeartEmoji
 
     @State private var presentedSetting: PresentedSetting?
+    /// 하트 고르기를 열 때의 값. 닫을 때와 다를 때만 올린다.
+    @State private var routeHeartEmojiOnOpen: RouteHeartEmoji?
+    @State private var routeHeartToastID: UUID?
 
     private enum PresentedSetting: String, Identifiable {
         case time
@@ -141,7 +144,9 @@ struct SettingsView: View {
                         }
                         #endif
 
-                        if let message = store.connectionMessage {
+                        // 하트를 못 올렸다는 걸 여기서 말하지 않으면, 내 지구본만 바뀐 채로
+                        // 상대는 옛 하트를 보고 있는 상태가 조용히 굳는다.
+                        if let message = store.connectionMessage ?? store.heartMessage {
                             Label(message, systemImage: "exclamationmark.circle.fill")
                                 .font(.rounded(.caption, .medium))
                                 .foregroundStyle(Palette.you)
@@ -150,12 +155,40 @@ struct SettingsView: View {
                     }
                     .padding(Metric.screenPadding)
                 }
+
+                if let routeHeartToastID {
+                    ProfileAvatarSuccessToast(message: "하트가 변경되었어요!")
+                        .id(routeHeartToastID)
+                        .padding(.horizontal, Metric.screenPadding)
+                        .padding(.top, Metric.s)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .transition(
+                            .move(edge: .top)
+                                .combined(with: .opacity)
+                                .combined(with: .scale(scale: 0.96, anchor: .top))
+                        )
+                        .zIndex(10)
+                }
             }
             .navigationTitle("설정")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.hidden, for: .navigationBar)
-            .sheet(item: $presentedSetting) { setting in
+            .sheet(item: $presentedSetting, onDismiss: finishRouteHeartEdit) { setting in
                 settingSheet(setting)
+            }
+            .task(id: routeHeartToastID) {
+                guard let toastID = routeHeartToastID else { return }
+
+                do {
+                    try await Task.sleep(for: .seconds(2.1))
+                } catch {
+                    return
+                }
+
+                guard routeHeartToastID == toastID else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    routeHeartToastID = nil
+                }
             }
             #if DEBUG
             .onAppear {
@@ -429,6 +462,7 @@ struct SettingsView: View {
             RouteHeartEmojiPicker(selection: $routeHeartEmoji)
                 .presentationDetents([.height(430)])
                 .presentationBackground(Palette.space)
+                .onAppear { routeHeartEmojiOnOpen = routeHeartEmoji }
 
         #if DEBUG
         case .debugMineCity:
@@ -453,6 +487,23 @@ struct SettingsView: View {
             .presentationDetents([.large])
             .presentationBackground(Palette.space)
         #endif
+        }
+    }
+
+    /// 하트를 넘기는 동안은 이 기기에만 반영해 두고, 다 고르고 닫을 때 한 번 올린다.
+    /// 탭마다 올리면 스무 번 고르는 사이 스무 번 나가고 토스트도 그만큼 뜬다.
+    private func finishRouteHeartEdit() {
+        guard let previous = routeHeartEmojiOnOpen else { return }
+        routeHeartEmojiOnOpen = nil
+        guard previous != routeHeartEmoji else { return }
+
+        Task {
+            let didShare = await store.pushRouteHeartEmoji()
+            // 연결 전이라면 올릴 곳이 없을 뿐, 고른 하트는 이미 내 지구본에 적용됐다.
+            guard didShare || !store.isConnected else { return }
+            withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
+                routeHeartToastID = UUID()
+            }
         }
     }
 

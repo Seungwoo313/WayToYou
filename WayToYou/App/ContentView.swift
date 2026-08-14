@@ -11,25 +11,30 @@ struct ContentView: View {
     @State private var now = Date()
     @State private var route = SheetRoute.none
     @State private var selectedTab = AppTab.home
-    @State private var floatingHearts: [HeartParticle] = []
+    @State private var heartFlights: [RouteHeartFlight] = []
     @State private var pendingHeartCount = 0
+    @State private var outgoingHeartCycleCount = 0
+    @State private var isHeartButtonDisabled = false
     @State private var heartSequence = 0
     @State private var heartSendTask: Task<Void, Never>?
+    @State private var outgoingHeartCycleResetTask: Task<Void, Never>?
+    @State private var heartCooldownTask: Task<Void, Never>?
     @State private var signalToast: SignalEvent?
     @State private var signalToastDismissTask: Task<Void, Never>?
     @State private var selectedGlobeMarker: GlobeMarkerSelection?
     @State private var launchHoldElapsed = false
     @State private var globeMarkerOrder = GlobeMarkerOrder.mineOnLeft
+    @State private var editingKeycap: EditingKeycap?
     @State private var weatherByCityID: [String: CurrentCityWeather] = [:]
     @State private var batteryMonitor = DeviceBatteryMonitor()
     @AppStorage("clockDisplayFormat") private var clockDisplayFormatRawValue =
         ClockDisplayFormat.twentyFourHour.rawValue
     @AppStorage("temperatureUnit") private var temperatureUnitRawValue =
         TemperatureUnit.celsius.rawValue
+    // 보일지, 뛸지는 이 기기의 취향이라 기기에 남는다.
+    // 어떤 하트인지만 연결에 올라가 두 사람이 같은 것을 본다.
     @AppStorage("showsRouteHeart") private var showsRouteHeart = true
     @AppStorage("animatesRouteHeart") private var animatesRouteHeart = true
-    @AppStorage("routeHeartEmoji") private var routeHeartEmojiRawValue =
-        RouteHeartEmoji.pink.rawValue
     @Environment(\.scenePhase) private var scenePhase
     #if DEBUG
     private let debugAccount: DebugAccount?
@@ -48,8 +53,6 @@ struct ContentView: View {
         #endif
         _backend = State(initialValue: SupabaseSessionController())
     }
-
-    private var focus: HomeFocus { store.focus(at: now) }
 
     private var isDebugSession: Bool {
         #if DEBUG
@@ -94,7 +97,14 @@ struct ContentView: View {
                     signalToast = nil
                 }
             }
-            .sheet(item: $route.presented) { destination in
+            // Signal 기계는 시트가 아니라 오버레이다. iOS 26 시트는 배경 유리를 강제로
+            // 그려서 기계 옆에 판이 남는데, 이건 기계만 화면 밑에서 올라와야 한다.
+            // 기계를 넣었다 뺐다 하지 않고 화면 밖에 세워 둔 채 위치만 옮긴다.
+            // 뷰를 만들고 텍스처를 굽는 일이 애니메이션 첫 프레임에 몰리면 그때만 끊긴다.
+            .overlay { signalScrim }
+            .overlay(alignment: .bottom) { signalMachine }
+            .overlay { keycapEditor }
+            .sheet(item: $route.sheetPresented) { destination in
                 sheet(for: destination)
             }
             .alert("Heart를 보내지 못했어요", isPresented: heartMessageBinding) {
@@ -108,11 +118,10 @@ struct ContentView: View {
                 Text(store.signalMessage ?? "잠시 후 다시 시도해주세요.")
             }
             #if DEBUG
-            // 스크린샷용. `simctl launch ... -previewSheet compose`처럼 띄운다.
+            // 스크린샷용. `simctl launch ... -previewSheet signal`처럼 띄운다.
             .onAppear {
                 guard store.isConnected else { return }
                 switch UserDefaults.standard.string(forKey: "previewSheet") {
-                case "compose": route = .compose
                 case "signal": route = .signal
                 case "keepsakes": selectedTab = .keepsakes
                 case "us": selectedTab = .us
@@ -161,11 +170,14 @@ struct ContentView: View {
 
     private var connectedApp: some View {
         TabView(selection: $selectedTab) {
-            Tab("홈", systemImage: "globe.asia.australia.fill", value: AppTab.home) {
+            Tab(value: AppTab.home) {
                 home
+            } label: {
+                Image(systemName: "globe.asia.australia.fill")
+                    .accessibilityLabel("홈")
             }
 
-            Tab("간직함", systemImage: "archivebox", value: AppTab.keepsakes) {
+            Tab(value: AppTab.keepsakes) {
                 KeepsakesView(
                     store: store,
                     now: now,
@@ -173,13 +185,19 @@ struct ContentView: View {
                 ) { parcel in
                     route = .letter(parcel)
                 }
+            } label: {
+                Image(systemName: "archivebox")
+                    .accessibilityLabel("간직함")
             }
 
-            Tab("우리", systemImage: "person.2", value: AppTab.us) {
+            Tab(value: AppTab.us) {
                 UsView(store: store, presentedAsSheet: false)
+            } label: {
+                Image(systemName: "person.2")
+                    .accessibilityLabel("우리")
             }
 
-            Tab("설정", systemImage: "gearshape", value: AppTab.settings) {
+            Tab(value: AppTab.settings) {
                 SettingsView(
                     store: store,
                     clockFormat: clockDisplayFormatBinding,
@@ -188,6 +206,9 @@ struct ContentView: View {
                     animatesRouteHeart: $animatesRouteHeart,
                     routeHeartEmoji: routeHeartEmojiBinding
                 )
+            } label: {
+                Image(systemName: "gearshape")
+                    .accessibilityLabel("설정")
             }
         }
         .statusBarHidden(selectedTab == .home)
@@ -217,7 +238,8 @@ struct ContentView: View {
                         selection: $selectedGlobeMarker,
                         showsRouteHeart: showsRouteHeart,
                         animatesRouteHeart: animatesRouteHeart,
-                        routeHeartEmoji: routeHeartEmoji.rawValue
+                        routeHeartEmoji: routeHeartEmoji.rawValue,
+                        heartFlights: heartFlights
                     )
 
                     if let signalToast {
@@ -232,15 +254,14 @@ struct ContentView: View {
                     }
 
                     Actions(
-                        focus: focus,
                         heartPulse: heartSequence,
+                        isHeartDisabled: isHeartButtonDisabled,
                         currentSignal: store.latestSignal(.outgoing, at: now)?.signal,
                         onHeart: queueHeart,
-                        onPrimary: primaryAction,
                         onSignal: { route = .signal }
                     )
                     .padding(.horizontal, Metric.screenPadding)
-                    .padding(.bottom, Metric.s)
+                    .padding(.bottom, Metric.xl)
                     .frame(maxHeight: .infinity, alignment: .bottom)
                 }
                 .clipped()
@@ -249,7 +270,6 @@ struct ContentView: View {
                 Color.black.frame(height: 1)
             }
 
-            HeartBurstOverlay(particles: floatingHearts)
         }
         .background(Palette.spaceDeep.ignoresSafeArea())
     }
@@ -299,13 +319,13 @@ struct ContentView: View {
     }
 
     private var routeHeartEmoji: RouteHeartEmoji {
-        RouteHeartEmoji(rawValue: routeHeartEmojiRawValue) ?? .pink
+        RouteHeartEmoji(rawValue: store.routeHeartEmoji) ?? .red
     }
 
     private var routeHeartEmojiBinding: Binding<RouteHeartEmoji> {
         Binding(
             get: { routeHeartEmoji },
-            set: { routeHeartEmojiRawValue = $0.rawValue }
+            set: { store.setRouteHeartEmoji($0.rawValue) }
         )
     }
 
@@ -323,30 +343,89 @@ struct ContentView: View {
 
     // MARK: - Sheets
 
+    private var isSignalOpen: Bool { route.presented == .signal }
+
+    /// 화면 밖에서 끌어올리는 방식은 한 프레임에 46pt씩 움직인다. 프레임 하나만 빠져도
+    /// 기계가 90pt 넘게 점프해 그대로 눈에 걸린다. 거리를 24pt로 줄이고 나타나는 일은
+    /// 투명도에 맡긴다. 투명도는 값이 건너뛰어도 "틀린 자리"로 보이지 않는다.
+    private var signalMachineMotion: Animation {
+        isSignalOpen
+            ? .easeOut(duration: 0.24)
+            : .easeIn(duration: 0.16)
+    }
+
+    /// 떠오르는 높이. 물건이 올라온다는 인상만 남기고 거리는 최소로 둔다.
+    private static let signalMachineRise: CGFloat = 40
+
+    /// 기계 밖을 누르면 내려간다. 지구를 가리지 않게 옅게만 덮는다.
+    private var signalScrim: some View {
+        Color.black
+            .opacity(isSignalOpen ? 0.28 : 0)
+            .ignoresSafeArea()
+            .contentShape(Rectangle())
+            .onTapGesture { route = .none }
+            .allowsHitTesting(isSignalOpen)
+            .animation(signalMachineMotion, value: isSignalOpen)
+    }
+
+    /// 키캡 하나를 바꾸는 패널. 기계보다 위에, 화면 전체를 덮는다.
+    @ViewBuilder
+    private var keycapEditor: some View {
+        if let editingKeycap {
+            KeycapEditorPanel(target: editingKeycap) {
+                self.editingKeycap = nil
+            } onSave: { key in
+                store.setSignalKey(key, at: editingKeycap.index)
+                self.editingKeycap = nil
+            }
+            .transition(.opacity)
+        }
+    }
+
+    /// 시트가 아니라 오버레이로 올라오는 Signal 기계.
+    private var signalMachine: some View {
+        SignalPickerSheet(
+            keys: store.signalKeys,
+            isPresented: isSignalOpen,
+            partnerName: store.partnerProfile?.displayName ?? "상대",
+            partnerCityName: store.partnerCity.name,
+            partnerClock: SignalPickerSheet.clock(in: store.partnerCity.timeZone, at: now),
+            timeOffset: SignalPickerSheet.offset(
+                from: store.homeCity.timeZone,
+                to: store.partnerCity.timeZone,
+                at: now
+            ),
+            distanceKilometers: store.distanceKilometers,
+            // 내려가는 것은 기계가 확인을 한 박자 보여준 뒤 스스로 한다.
+            onSelect: { signal in
+                UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+                // 상대에게는 즉시 보내되, 내 아이콘만 기계가 내려간 뒤 바뀐다.
+                Task {
+                    _ = await store.sendSignal(
+                        signal,
+                        localDisplayDelay: .milliseconds(900)
+                    )
+                }
+            },
+            onEditKey: { index in
+                guard store.signalKeys.indices.contains(index) else { return }
+                editingKeycap = EditingKeycap(index: index, key: store.signalKeys[index])
+            },
+            onDismiss: { route = .none }
+        )
+        // 닫혀 있을 때도 제자리에 그대로 서 있다. 여는 프레임에 뷰 생성이나
+        // 텍스처 굽기가 끼어들지 않는다.
+        .offset(y: isSignalOpen ? 0 : Self.signalMachineRise)
+        .opacity(isSignalOpen ? 1 : 0)
+        .allowsHitTesting(isSignalOpen)
+        .animation(signalMachineMotion, value: isSignalOpen)
+    }
+
     @ViewBuilder
     private func sheet(for destination: SheetRoute.Destination) -> some View {
         switch destination {
         case .signal:
-            SignalPickerSheet(
-                selectedSignal: store.latestSignal(.outgoing, at: now)?.signal
-            ) { signal in
-                route = .none
-                UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                Task { _ = await store.sendSignal(signal) }
-            }
-            .presentationDetents([.height(270), .medium])
-            .presentationDragIndicator(.visible)
-
-        case .compose:
-            ParcelComposerSheet(
-                homeCity: store.homeCity,
-                partnerCity: store.partnerCity,
-                flightDuration: store.flightDuration()
-            ) { title, message, wrap in
-                store.sendParcel(title: title, message: message, wrap: wrap)
-                route = .none
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-            }
+            EmptyView()
 
         case .letter(let parcel):
             ParcelLetterSheet(parcel: parcel) {
@@ -367,28 +446,50 @@ struct ContentView: View {
 
     // MARK: - Actions
 
-    private func primaryAction() {
-        if case .readyToOpen(let parcel) = focus {
-            route = .letter(parcel)
-        } else {
-            route = .compose
-        }
-    }
-
     private func queueHeart() {
-        guard store.isConnected else { return }
+        guard store.isConnected,
+              !isHeartButtonDisabled,
+              outgoingHeartCycleCount < 30 else { return }
 
-        pendingHeartCount = min(pendingHeartCount + 1, 50)
+        outgoingHeartCycleCount += 1
+        pendingHeartCount = min(pendingHeartCount + 1, 30)
         emitHeart(incoming: false)
-        UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.45)
+        UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.78)
+
+        outgoingHeartCycleResetTask?.cancel()
+        if outgoingHeartCycleCount == 30 {
+            beginHeartCooldown()
+        } else {
+            outgoingHeartCycleResetTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { return }
+                outgoingHeartCycleCount = 0
+                outgoingHeartCycleResetTask = nil
+            }
+        }
 
         heartSendTask?.cancel()
         heartSendTask = Task {
-            if pendingHeartCount < 50 {
+            if outgoingHeartCycleCount < 30 {
                 try? await Task.sleep(for: .milliseconds(700))
             }
             guard !Task.isCancelled else { return }
             await flushPendingHearts()
+        }
+    }
+
+    /// 채운 직후부터 31번째 입력을 막고, 30번째 하트가 도착해 터지면 바로 푼다.
+    private func beginHeartCooldown() {
+        isHeartButtonDisabled = true
+        outgoingHeartCycleResetTask?.cancel()
+        outgoingHeartCycleResetTask = nil
+        heartCooldownTask?.cancel()
+        heartCooldownTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1_600))
+            guard !Task.isCancelled else { return }
+            outgoingHeartCycleCount = 0
+            isHeartButtonDisabled = false
+            heartCooldownTask = nil
         }
     }
 
@@ -414,12 +515,9 @@ struct ContentView: View {
     }
 
     private func playIncoming(_ burst: HeartBurst) async {
-        for index in 0..<burst.count {
+        for _ in 0..<burst.count {
             guard !Task.isCancelled else { return }
             emitHeart(incoming: true)
-            if index.isMultiple(of: 4) {
-                UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.35)
-            }
             try? await Task.sleep(for: .milliseconds(110))
         }
     }
@@ -516,12 +614,12 @@ struct ContentView: View {
 
     private func emitHeart(incoming: Bool) {
         heartSequence += 1
-        let particle = HeartParticle.make(sequence: heartSequence, incoming: incoming)
-        floatingHearts.append(particle)
+        let flight = RouteHeartFlight(incoming: incoming)
+        heartFlights.append(flight)
 
         Task {
             try? await Task.sleep(for: .milliseconds(1_600))
-            floatingHearts.removeAll { $0.id == particle.id }
+            heartFlights.removeAll { $0.id == flight.id }
         }
     }
 
@@ -701,59 +799,42 @@ private struct PartnerSignalToast: View {
 
 // MARK: - Actions
 
-/// 감정의 무게가 작은 순서대로 둔, 홈의 세 가지 아이콘 액션.
+/// 가장 가볍게 자주 주고받는, 홈의 두 가지 아이콘 액션.
 private struct Actions: View {
-    let focus: HomeFocus
     let heartPulse: Int
+    let isHeartDisabled: Bool
     let currentSignal: CoupleSignal?
     let onHeart: () -> Void
-    let onPrimary: () -> Void
     let onSignal: () -> Void
 
-    private var isArrived: Bool {
-        if case .readyToOpen = focus { return true }
-        return false
-    }
-
-    /// 평상시엔 흰색. 소포가 도착했을 때만 포장지 색으로 바뀐다.
-    /// 늘 색이 차 있으면 도착이 특별해 보이지 않는다.
-    private var arrivedWrap: ParcelWrap? {
-        if case .readyToOpen(let parcel) = focus { return parcel.wrap }
-        return nil
-    }
-
     var body: some View {
-        HStack(spacing: Metric.s) {
+        HStack(spacing: Metric.m) {
             Button(action: onHeart) {
                 Image(systemName: "heart.fill")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Color.pink)
                     .symbolEffect(.bounce, value: heartPulse)
-                    .frame(width: 52, height: 44)
+                    .frame(width: 46, height: 46)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
+            .buttonStyle(.glass(.clear))
+            .buttonBorderShape(.circle)
+            .disabled(isHeartDisabled)
             .accessibilityLabel("Heart 보내기")
-            .accessibilityHint("연속으로 누르면 누른 횟수만큼 상대에게 전달됩니다")
+            .accessibilityHint(
+                isHeartDisabled
+                    ? "잠시 후 다시 보낼 수 있습니다"
+                    : "30개까지 연속으로 상대에게 보낼 수 있습니다"
+            )
 
             Button(action: onSignal) {
-                Text(currentSignal?.emoji ?? "📡")
-                    .font(.system(size: 21))
-                    .frame(width: 52, height: 44)
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(Palette.textPrimary)
+                    .frame(width: 46, height: 46)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
+            .buttonStyle(.glass(.clear))
+            .buttonBorderShape(.circle)
             .accessibilityLabel(currentSignal.map { "내 Signal \($0.title). Signal 바꾸기" } ?? "Signal 보내기")
-
-            Button(action: onPrimary) {
-                Image(systemName: isArrived ? "shippingbox.fill" : "shippingbox")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(arrivedWrap?.color ?? Palette.textPrimary)
-                    .frame(width: 52, height: 44)
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
-            .accessibilityLabel(isArrived ? "도착한 소포 열기" : "소포 보내기")
         }
     }
 }
@@ -764,7 +845,6 @@ private struct Actions: View {
 struct SheetRoute {
     enum Destination: Identifiable, Hashable {
         case signal
-        case compose
         case letter(Parcel)
         case keepsakes
         case us
@@ -772,7 +852,6 @@ struct SheetRoute {
         var id: String {
             switch self {
             case .signal: "signal"
-            case .compose: "compose"
             case .letter(let parcel): "letter-\(parcel.id)"
             case .keepsakes: "keepsakes"
             case .us: "us"
@@ -782,9 +861,14 @@ struct SheetRoute {
 
     var presented: Destination?
 
+    /// Signal은 시트가 아니라 오버레이로 올라오므로 시트 경로에서 빼 둔다.
+    var sheetPresented: Destination? {
+        get { presented == .signal ? nil : presented }
+        set { presented = newValue }
+    }
+
     static let none = SheetRoute(presented: nil)
     static let signal = SheetRoute(presented: .signal)
-    static let compose = SheetRoute(presented: .compose)
     static let keepsakes = SheetRoute(presented: .keepsakes)
     static let us = SheetRoute(presented: .us)
     static func letter(_ parcel: Parcel) -> SheetRoute { SheetRoute(presented: .letter(parcel)) }

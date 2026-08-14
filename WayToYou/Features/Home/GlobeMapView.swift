@@ -86,6 +86,7 @@ struct GlobeMapView: UIViewRepresentable {
     let showsRouteHeart: Bool
     let animatesRouteHeart: Bool
     let routeHeartEmoji: String
+    let heartFlights: [RouteHeartFlight]
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -138,6 +139,7 @@ struct GlobeMapView: UIViewRepresentable {
             showsRouteHeart: showsRouteHeart,
             animatesRouteHeart: animatesRouteHeart,
             routeHeartEmoji: routeHeartEmoji,
+            heartFlights: heartFlights,
             in: mapView
         )
         return mapView
@@ -159,6 +161,7 @@ struct GlobeMapView: UIViewRepresentable {
             showsRouteHeart: showsRouteHeart,
             animatesRouteHeart: animatesRouteHeart,
             routeHeartEmoji: routeHeartEmoji,
+            heartFlights: heartFlights,
             in: mapView
         )
     }
@@ -636,7 +639,8 @@ struct GlobeMapView: UIViewRepresentable {
         private var latestRoute: CityRoute?
         private var latestShowsRouteHeart = true
         private var latestAnimatesRouteHeart = true
-        private var latestRouteHeartEmoji = RouteHeartEmoji.pink.rawValue
+        private var latestRouteHeartEmoji = RouteHeartEmoji.red.rawValue
+        private var latestHeartFlights: [RouteHeartFlight] = []
         private var appliedRoute: CityRoute?
         private var routeOverlay: MKGeodesicPolyline?
         private var routeHeartAnnotation: RouteHeartAnnotation?
@@ -678,6 +682,11 @@ struct GlobeMapView: UIViewRepresentable {
         /// probe 좌표를 옮긴 직후 MapKit이 아직 다시 투영하지 않은 상태.
         private var routeSampleProjectionIsStale = false
         private var markerRepresentationRefreshScheduled = false
+        private var handledHeartFlightIDs: Set<UUID> = []
+        private var handledHeartFlightOrder: [UUID] = []
+        private var activeHeartFlights: [UUID: ActiveHeartFlight] = [:]
+        private var heartFlightDisplayLink: CADisplayLink?
+        private let heartArrivalFeedback = UIImpactFeedbackGenerator(style: .rigid)
 
         private enum MarkerRepresentation {
             case native
@@ -695,6 +704,26 @@ struct GlobeMapView: UIViewRepresentable {
             let hiddenArc: Double
         }
 
+        private struct ActiveHeartFlight {
+            let view: RouteHeartFlightView
+            let incoming: Bool
+            let trajectory: HeartTrajectory
+            let startTime: CFTimeInterval
+            let duration: CFTimeInterval
+        }
+
+        /// 두 프로필 사이의 단순한 곡면 아크를 몇 개의 평행 레인으로 나눈다.
+        private struct HeartTrajectory {
+            let arcLane: CGFloat
+
+            init(id: UUID) {
+                var uuid = id.uuid
+                let bytes = withUnsafeBytes(of: &uuid) { Array($0) }
+                let lanes: [CGFloat] = [-22, -10, 0, 12, 24]
+                arcLane = lanes[Int(bytes[0]) % lanes.count]
+            }
+        }
+
 
         init(
             cameraRouteID: String,
@@ -708,6 +737,7 @@ struct GlobeMapView: UIViewRepresentable {
 
         func connect(to mapView: NativeGlobeMapView) {
             self.mapView = mapView
+            heartArrivalFeedback.prepare()
             mapView.onUsableLayout = { [weak self, weak mapView] in
                 guard let self, let mapView else { return }
                 self.beginInitialFramingIfPossible(in: mapView)
@@ -741,6 +771,7 @@ struct GlobeMapView: UIViewRepresentable {
             routeSampleVectors.removeAll()
             routeSampleProjectionIsStale = false
             markerRepresentationRefreshScheduled = false
+            cancelHeartFlights()
             mapView = nil
         }
 
@@ -750,6 +781,7 @@ struct GlobeMapView: UIViewRepresentable {
             showsRouteHeart: Bool,
             animatesRouteHeart: Bool,
             routeHeartEmoji: String,
+            heartFlights: [RouteHeartFlight],
             in mapView: NativeGlobeMapView
         ) {
             latestMarkers = markers
@@ -757,6 +789,7 @@ struct GlobeMapView: UIViewRepresentable {
             latestShowsRouteHeart = showsRouteHeart
             latestAnimatesRouteHeart = animatesRouteHeart
             latestRouteHeartEmoji = routeHeartEmoji
+            latestHeartFlights = heartFlights
             guard !needsInitialFraming,
                   !defersMarkerSyncUntilCameraCommit else { return }
             applyLatestMapContent(in: mapView)
@@ -765,12 +798,14 @@ struct GlobeMapView: UIViewRepresentable {
         private func applyLatestMapContent(in mapView: NativeGlobeMapView) {
             applyLatestRoute(in: mapView)
             applyLatestMarkers(in: mapView)
+            syncHeartFlights(in: mapView)
         }
 
         private func applyLatestRoute(in mapView: MKMapView) {
             let routeChanged = appliedRoute != latestRoute
 
             if routeChanged {
+                cancelHeartFlights()
                 if let routeOverlay {
                     mapView.removeOverlay(routeOverlay)
                     self.routeOverlay = nil
@@ -817,6 +852,194 @@ struct GlobeMapView: UIViewRepresentable {
             }
 
             syncRouteHeart(in: mapView)
+        }
+
+        private func syncHeartFlights(in mapView: NativeGlobeMapView) {
+            let newFlights = latestHeartFlights.filter {
+                !handledHeartFlightIDs.contains($0.id)
+            }
+            guard !newFlights.isEmpty else { return }
+
+            for flight in newFlights {
+                rememberHandledHeartFlight(flight.id)
+                beginHeartFlight(flight, in: mapView)
+            }
+        }
+
+        private func rememberHandledHeartFlight(_ id: UUID) {
+            handledHeartFlightIDs.insert(id)
+            handledHeartFlightOrder.append(id)
+
+            // 오래 켜 둔 세션에서도 일회성 이벤트 ID가 끝없이 쌓이지 않게 한다.
+            let retainedCount = 256
+            guard handledHeartFlightOrder.count > retainedCount else { return }
+            let expiredCount = handledHeartFlightOrder.count - retainedCount
+            let expired = handledHeartFlightOrder.prefix(expiredCount)
+            handledHeartFlightIDs.subtract(expired)
+            handledHeartFlightOrder.removeFirst(expiredCount)
+        }
+
+        private func beginHeartFlight(
+            _ flight: RouteHeartFlight,
+            in mapView: NativeGlobeMapView
+        ) {
+            let view = RouteHeartFlightView()
+            mapView.presentationOverlayView.addSubview(view)
+
+            activeHeartFlights[flight.id] = ActiveHeartFlight(
+                view: view,
+                incoming: flight.incoming,
+                trajectory: HeartTrajectory(id: flight.id),
+                startTime: CACurrentMediaTime(),
+                duration: UIAccessibility.isReduceMotionEnabled ? 0.85 : 1.45
+            )
+            advanceHeartFlights(at: CACurrentMediaTime(), in: mapView)
+
+            guard heartFlightDisplayLink == nil else { return }
+            let displayLink = CADisplayLink(
+                target: self,
+                selector: #selector(advanceHeartFlightsDisplayLink)
+            )
+            heartFlightDisplayLink = displayLink
+            displayLink.add(to: .main, forMode: .common)
+        }
+
+        @objc private func advanceHeartFlightsDisplayLink(
+            _ displayLink: CADisplayLink
+        ) {
+            guard let mapView else {
+                cancelHeartFlights()
+                return
+            }
+            advanceHeartFlights(at: displayLink.targetTimestamp, in: mapView)
+        }
+
+        private func advanceHeartFlights(
+            at timestamp: CFTimeInterval,
+            in mapView: NativeGlobeMapView
+        ) {
+            let endpoints = heartFlightEndpoints(in: mapView)
+            var finishedIDs: [UUID] = []
+
+            for (id, flight) in activeHeartFlights {
+                let progress = min(max(
+                    (timestamp - flight.startTime) / flight.duration,
+                    0
+                ), 1)
+                if progress >= 1 {
+                    finishedIDs.append(id)
+                    continue
+                }
+
+                // 천천히 출발하고 도착 직전에 부드럽게 감속한다.
+                let flightProgress = 0.5 - cos(progress * .pi) / 2
+                if let endpoints {
+                    let start = flight.incoming ? endpoints.partner : endpoints.mine
+                    let end = flight.incoming ? endpoints.mine : endpoints.partner
+                    flight.view.center = heartFlightPoint(
+                        at: CGFloat(flightProgress),
+                        from: start,
+                        to: end,
+                        trajectory: flight.trajectory
+                    )
+                    flight.view.isHidden = false
+                } else {
+                    flight.view.isHidden = true
+                }
+                flight.view.setProgress(
+                    progress,
+                    visualScale: 1,
+                    rotation: 0
+                )
+            }
+
+            for id in finishedIDs {
+                guard let flight = activeHeartFlights.removeValue(forKey: id) else {
+                    continue
+                }
+                flight.view.removeFromSuperview()
+                // 어느 방향이든 도착한 프로필에 같은 펄스와 햅틱을 재생한다.
+                pulseHeart(
+                    on: flight.incoming ? .mine : .partner,
+                    in: mapView
+                )
+                heartArrivalFeedback.impactOccurred(intensity: 0.82)
+                heartArrivalFeedback.prepare()
+            }
+            guard activeHeartFlights.isEmpty else { return }
+            heartFlightDisplayLink?.invalidate()
+            heartFlightDisplayLink = nil
+        }
+
+        /// 도시 좌표가 아니라 화면에 보이는 두 프로필 중심을 정확한 양 끝으로 쓴다.
+        private func heartFlightEndpoints(
+            in mapView: NativeGlobeMapView
+        ) -> (mine: CGPoint, partner: CGPoint)? {
+            guard let mine = displayedAvatarCenter(for: .mine, in: mapView),
+                  let partner = displayedAvatarCenter(for: .partner, in: mapView) else {
+                return nil
+            }
+            return (mine, partner)
+        }
+
+        private func heartFlightPoint(
+            at progress: CGFloat,
+            from start: CGPoint,
+            to end: CGPoint,
+            trajectory: HeartTrajectory
+        ) -> CGPoint {
+            let distance = hypot(end.x - start.x, end.y - start.y)
+            let arcLift = min(max(distance * 0.16, 34), 68) + trajectory.arcLane
+            let control = CGPoint(
+                x: (start.x + end.x) / 2,
+                y: (start.y + end.y) / 2 - arcLift
+            )
+            let inverse = 1 - progress
+
+            return CGPoint(
+                x: inverse * inverse * start.x
+                    + 2 * inverse * progress * control.x
+                    + progress * progress * end.x,
+                y: inverse * inverse * start.y
+                    + 2 * inverse * progress * control.y
+                    + progress * progress * end.y
+            )
+        }
+
+        private func displayedAvatarCenter(
+            for id: GlobeProfileMarker.ID,
+            in mapView: NativeGlobeMapView
+        ) -> CGPoint? {
+            if backsideMarkerIDs.contains(id),
+               let indicator = backsideIndicatorsByID[id],
+               !indicator.isHidden {
+                return indicator.avatarCenter(convertedTo: mapView)
+            }
+            if let annotation = annotationsByID[id],
+               let view = mapView.view(for: annotation) as? GlobeProfileAnnotationView,
+               !view.isHidden {
+                return view.avatarCenter(convertedTo: mapView)
+            }
+            return nil
+        }
+
+        private func pulseHeart(
+            on id: GlobeProfileMarker.ID,
+            in mapView: NativeGlobeMapView
+        ) {
+            backsideIndicatorsByID[id]?.pulseHeart()
+            if let annotation = annotationsByID[id],
+               let view = mapView.view(for: annotation)
+                as? GlobeProfileAnnotationView {
+                view.pulseHeart()
+            }
+        }
+
+        private func cancelHeartFlights() {
+            heartFlightDisplayLink?.invalidate()
+            heartFlightDisplayLink = nil
+            activeHeartFlights.values.forEach { $0.view.removeFromSuperview() }
+            activeHeartFlights.removeAll()
         }
 
         /// Route가 바뀔 때마다 probe 257개를 통째로 버리고 다시 만들 필요는 없다.
@@ -2136,6 +2359,55 @@ struct GlobeMapView: UIViewRepresentable {
     }
 }
 
+private final class RouteHeartFlightView: UIView {
+    private let heartImageView = UIImageView()
+
+    init() {
+        super.init(frame: CGRect(x: 0, y: 0, width: 38, height: 38))
+        isUserInteractionEnabled = false
+        isAccessibilityElement = false
+        backgroundColor = .clear
+        isOpaque = false
+
+        heartImageView.image = UIImage(
+            systemName: "heart.fill",
+            withConfiguration: UIImage.SymbolConfiguration(
+                pointSize: 23,
+                weight: .semibold
+            )
+        )
+        heartImageView.tintColor = .systemPink
+        heartImageView.contentMode = .center
+        heartImageView.frame = bounds
+        heartImageView.layer.shadowColor = UIColor.black.cgColor
+        heartImageView.layer.shadowOpacity = 0.42
+        heartImageView.layer.shadowRadius = 4
+        heartImageView.layer.shadowOffset = CGSize(width: 0, height: 1.5)
+        addSubview(heartImageView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func setProgress(
+        _ progress: Double,
+        visualScale: CGFloat,
+        rotation: CGFloat
+    ) {
+        let entrance = min(progress / 0.12, 1)
+        let exit = min((1 - progress) / 0.16, 1)
+        alpha = CGFloat(entrance * exit)
+
+        // 출발할 때 가볍게 커지고, 하트마다 크기와 기울기가 조금씩 다르다.
+        let pop = sin(min(progress / 0.22, 1) * .pi)
+        let scale = CGFloat(0.72 + entrance * 0.28 + pop * 0.13) * visualScale
+        transform = CGAffineTransform(rotationAngle: rotation)
+            .scaledBy(x: scale, y: scale)
+    }
+}
+
 private final class RouteHeartAnnotation: NSObject, MKAnnotation {
     @objc dynamic var coordinate: CLLocationCoordinate2D
     var emoji: String
@@ -2379,6 +2651,9 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     private let batteryCapView = UIView()
     private let batteryBoltImageView = UIImageView()
     private var batteryDisplay: GlobeBatteryDisplay?
+    private var displayedSignal: CoupleSignal?
+    private var hasConfiguredSignal = false
+    private var signalAnimationGeneration = 0
     private var markerSide = GlobeMarkerSide.left
     private var isBacksidePresentation = false
     private var coordinateLegProgress: CGFloat = 1
@@ -2507,13 +2782,19 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         super.layoutSubviews()
 
         let avatarX = (bounds.width - Layout.avatarSize) / 2
-        avatarView.frame = CGRect(
+        let avatarFrame = CGRect(
             x: avatarX,
             y: Layout.avatarTop,
             width: Layout.avatarSize,
             height: Layout.avatarSize
         )
-        selectionHaloView.frame = avatarView.frame.insetBy(dx: -5, dy: -5)
+        // 흡수 애니메이션 중인 transform과 MapKit의 반복 layout이 서로의 frame을
+        // 다시 계산하지 않도록, 변형의 영향을 받지 않는 bounds/center로 배치한다.
+        avatarView.bounds = CGRect(origin: .zero, size: avatarFrame.size)
+        avatarView.center = CGPoint(x: avatarFrame.midX, y: avatarFrame.midY)
+        let haloFrame = avatarFrame.insetBy(dx: -5, dy: -5)
+        selectionHaloView.bounds = CGRect(origin: .zero, size: haloFrame.size)
+        selectionHaloView.center = CGPoint(x: haloFrame.midX, y: haloFrame.midY)
         selectionHaloView.layer.cornerRadius = selectionHaloView.bounds.width / 2
         avatarImageView.frame = avatarView.bounds
         fallbackLabel.frame = avatarView.bounds
@@ -2521,18 +2802,22 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         let badgeX: CGFloat
         switch markerSide {
         case .left:
-            badgeX = avatarView.frame.minX - badgeSize / 2 + 3
+            badgeX = avatarFrame.minX - badgeSize / 2 + 3
         case .right:
-            badgeX = avatarView.frame.maxX - badgeSize / 2 - 3
+            badgeX = avatarFrame.maxX - badgeSize / 2 - 3
         }
         signalBadgeView.frame = CGRect(
             x: badgeX,
-            y: avatarView.frame.maxY - badgeSize / 2 - 3,
+            y: avatarFrame.maxY - badgeSize / 2 - 3,
             width: badgeSize,
             height: badgeSize
         )
-        signalBadgeImageView.frame = signalBadgeView.bounds
-        tapControl.frame = avatarView.frame.insetBy(dx: -7, dy: -7)
+        signalBadgeImageView.bounds = signalBadgeView.bounds
+        signalBadgeImageView.center = CGPoint(
+            x: signalBadgeView.bounds.midX,
+            y: signalBadgeView.bounds.midY
+        )
+        tapControl.frame = avatarFrame.insetBy(dx: -7, dy: -7)
 
         layoutBatteryPill()
 
@@ -2608,6 +2893,12 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         selectionHaloView.transform = .identity
         selectionHaloView.alpha = 0
         avatarImageView.image = nil
+        signalAnimationGeneration += 1
+        displayedSignal = nil
+        hasConfiguredSignal = false
+        signalBadgeImageView.layer.removeAllAnimations()
+        signalBadgeImageView.transform = .identity
+        signalBadgeImageView.alpha = 1
         signalBadgeImageView.image = nil
         signalBadgeView.isHidden = true
         fallbackLabel.text = nil
@@ -2628,6 +2919,27 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         guard markerSide != side else { return }
         markerSide = side
         setNeedsLayout()
+    }
+
+    func avatarCenter(convertedTo view: UIView) -> CGPoint {
+        layoutIfNeeded()
+        return convert(avatarView.center, to: view)
+    }
+
+    /// 누적하지 않고 살짝 커졌다가 매번 원래 크기로 돌아오는 도착 펄스다.
+    func pulseHeart() {
+        guard !UIAccessibility.isReduceMotionEnabled else { return }
+
+        let pulse = CAKeyframeAnimation(keyPath: "transform.scale")
+        pulse.values = [1, 1.12, 0.98, 1]
+        pulse.keyTimes = [0, 0.32, 0.7, 1]
+        pulse.timingFunctions = [
+            CAMediaTimingFunction(name: .easeOut),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+            CAMediaTimingFunction(name: .easeOut)
+        ]
+        pulse.duration = 0.3
+        avatarView.layer.add(pulse, forKey: "heartArrivalPulse")
     }
 
     func setCoordinateOffsetX(_ horizontalOffset: CGFloat) {
@@ -2702,13 +3014,17 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     private func playTapFeedback() {
         avatarView.layer.removeAllAnimations()
         selectionHaloView.layer.removeAllAnimations()
-        avatarView.transform = .identity
+        let restingTransform = CGAffineTransform.identity
+        avatarView.transform = restingTransform
         selectionHaloView.transform = .identity
         selectionHaloView.alpha = 0
 
         guard !UIAccessibility.isReduceMotionEnabled else { return }
 
-        avatarView.transform = CGAffineTransform(scaleX: 0.82, y: 0.82)
+        avatarView.transform = CGAffineTransform(
+            scaleX: 0.82,
+            y: 0.82
+        )
         UIView.animate(
             withDuration: 0.32,
             delay: 0,
@@ -2716,7 +3032,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
             initialSpringVelocity: 0.8,
             options: [.allowUserInteraction, .beginFromCurrentState]
         ) {
-            self.avatarView.transform = .identity
+            self.avatarView.transform = restingTransform
         }
     }
 
@@ -2729,15 +3045,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     }
 
     func configure(with marker: GlobeProfileMarker) {
-        if let signal = marker.signal {
-            signalBadgeImageView.image = EmojiStickerRenderer.image(
-                for: signal.emoji
-            )
-            signalBadgeView.isHidden = false
-        } else {
-            signalBadgeImageView.image = nil
-            signalBadgeView.isHidden = true
-        }
+        updateSignalBadge(to: marker.signal)
 
         if let data = marker.avatarData, let image = UIImage(data: data) {
             avatarView.backgroundColor = UIColor(white: 0.12, alpha: 1)
@@ -2764,6 +3072,102 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         accessibilityLabel =
             "\(marker.displayName), \(marker.city.name) 프로필\(signalDescription)\(batteryDescription)"
         updateAccessibilityValue()
+    }
+
+    private func updateSignalBadge(to signal: CoupleSignal?) {
+        let shouldAnimate = hasConfiguredSignal && displayedSignal != signal
+        displayedSignal = signal
+        hasConfiguredSignal = true
+
+        guard shouldAnimate, !UIAccessibility.isReduceMotionEnabled else {
+            signalAnimationGeneration += 1
+            signalBadgeImageView.layer.removeAllAnimations()
+            signalBadgeImageView.transform = .identity
+            signalBadgeImageView.alpha = 1
+            signalBadgeImageView.image = signal.map {
+                EmojiStickerRenderer.image(for: $0.emoji)
+            }
+            signalBadgeView.isHidden = signal == nil
+            return
+        }
+
+        signalAnimationGeneration += 1
+        let generation = signalAnimationGeneration
+        signalBadgeImageView.layer.removeAllAnimations()
+
+        guard let signal else {
+            UIView.animate(
+                withDuration: 0.14,
+                delay: 0,
+                options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseIn]
+            ) {
+                self.signalBadgeImageView.alpha = 0
+                self.signalBadgeImageView.transform = CGAffineTransform(
+                    scaleX: 0.68,
+                    y: 0.68
+                )
+            } completion: { _ in
+                guard self.signalAnimationGeneration == generation else { return }
+                self.signalBadgeImageView.image = nil
+                self.signalBadgeImageView.alpha = 1
+                self.signalBadgeImageView.transform = .identity
+                self.signalBadgeView.isHidden = true
+            }
+            return
+        }
+
+        let newImage = EmojiStickerRenderer.image(for: signal.emoji)
+        let landNewSignal = {
+            guard self.signalAnimationGeneration == generation else { return }
+            self.signalBadgeImageView.image = newImage
+            self.signalBadgeView.isHidden = false
+            self.signalBadgeImageView.alpha = 0
+            self.signalBadgeImageView.transform = CGAffineTransform(
+                translationX: 0,
+                y: -10
+            ).scaledBy(x: 0.56, y: 0.56)
+
+            UIView.animate(
+                withDuration: 0.18,
+                delay: 0,
+                options: [.allowUserInteraction, .curveEaseIn]
+            ) {
+                self.signalBadgeImageView.alpha = 1
+                self.signalBadgeImageView.transform = CGAffineTransform(
+                    translationX: 0,
+                    y: 3
+                ).scaledBy(x: 1.6, y: 1.6)
+            } completion: { _ in
+                guard self.signalAnimationGeneration == generation else { return }
+                UIView.animate(
+                    withDuration: 0.42,
+                    delay: 0,
+                    usingSpringWithDamping: 0.46,
+                    initialSpringVelocity: 0.9,
+                    options: [.allowUserInteraction, .beginFromCurrentState]
+                ) {
+                    self.signalBadgeImageView.transform = .identity
+                }
+            }
+        }
+
+        guard signalBadgeImageView.image != nil else {
+            landNewSignal()
+            return
+        }
+        UIView.animate(
+            withDuration: 0.1,
+            delay: 0,
+            options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseIn]
+        ) {
+            self.signalBadgeImageView.alpha = 0.3
+            self.signalBadgeImageView.transform = CGAffineTransform(
+                translationX: 0,
+                y: 2
+            ).scaledBy(x: 0.72, y: 0.72)
+        } completion: { _ in
+            landNewSignal()
+        }
     }
 
     private func updateAccessibilityValue() {
@@ -2867,6 +3271,16 @@ private final class GlobeBacksideIndicatorView: UIView {
 
     func setProfileScale(_ scale: CGFloat) {
         profileView.transform = CGAffineTransform(scaleX: scale, y: scale)
+    }
+
+    func pulseHeart() {
+        profileView.pulseHeart()
+    }
+
+    func avatarCenter(convertedTo view: UIView) -> CGPoint {
+        layoutIfNeeded()
+        profileView.layoutIfNeeded()
+        return profileView.avatarCenter(convertedTo: view)
     }
 
 }
@@ -3018,7 +3432,8 @@ final class NativeGlobeMapView: MKMapView {
         selection: .constant(nil),
         showsRouteHeart: true,
         animatesRouteHeart: true,
-        routeHeartEmoji: RouteHeartEmoji.pink.rawValue
+        routeHeartEmoji: RouteHeartEmoji.red.rawValue,
+        heartFlights: []
     )
     .ignoresSafeArea()
 }
