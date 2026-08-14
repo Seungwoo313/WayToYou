@@ -11,10 +11,17 @@ struct ContentView: View {
     @State private var now = Date()
     @State private var route = SheetRoute.none
     @State private var selectedTab = AppTab.home
-    @State private var floatingHearts: [HeartParticle] = []
+    @State private var heartFlights: [RouteHeartFlight] = []
     @State private var pendingHeartCount = 0
+    @State private var outgoingHeartCycleCount = 0
+    @State private var outgoingHeartCycleID = UUID()
+    @State private var isHeartButtonDisabled = false
     @State private var heartSequence = 0
     @State private var heartSendTask: Task<Void, Never>?
+    @State private var outgoingHeartCycleResetTask: Task<Void, Never>?
+    @State private var heartCooldownTask: Task<Void, Never>?
+    @State private var incomingHeartCycleID = UUID()
+    @State private var lastIncomingHeartSentAt: Date?
     @State private var signalToast: SignalEvent?
     @State private var signalToastDismissTask: Task<Void, Never>?
     @State private var selectedGlobeMarker: GlobeMarkerSelection?
@@ -49,8 +56,6 @@ struct ContentView: View {
         #endif
         _backend = State(initialValue: SupabaseSessionController())
     }
-
-    private var focus: HomeFocus { store.focus(at: now) }
 
     private var isDebugSession: Bool {
         #if DEBUG
@@ -116,11 +121,10 @@ struct ContentView: View {
                 Text(store.signalMessage ?? "잠시 후 다시 시도해주세요.")
             }
             #if DEBUG
-            // 스크린샷용. `simctl launch ... -previewSheet compose`처럼 띄운다.
+            // 스크린샷용. `simctl launch ... -previewSheet signal`처럼 띄운다.
             .onAppear {
                 guard store.isConnected else { return }
                 switch UserDefaults.standard.string(forKey: "previewSheet") {
-                case "compose": route = .compose
                 case "signal": route = .signal
                 case "keepsakes": selectedTab = .keepsakes
                 case "us": selectedTab = .us
@@ -169,11 +173,14 @@ struct ContentView: View {
 
     private var connectedApp: some View {
         TabView(selection: $selectedTab) {
-            Tab("홈", systemImage: "globe.asia.australia.fill", value: AppTab.home) {
+            Tab(value: AppTab.home) {
                 home
+            } label: {
+                Image(systemName: "globe.asia.australia.fill")
+                    .accessibilityLabel("홈")
             }
 
-            Tab("간직함", systemImage: "archivebox", value: AppTab.keepsakes) {
+            Tab(value: AppTab.keepsakes) {
                 KeepsakesView(
                     store: store,
                     now: now,
@@ -181,13 +188,19 @@ struct ContentView: View {
                 ) { parcel in
                     route = .letter(parcel)
                 }
+            } label: {
+                Image(systemName: "archivebox")
+                    .accessibilityLabel("간직함")
             }
 
-            Tab("우리", systemImage: "person.2", value: AppTab.us) {
+            Tab(value: AppTab.us) {
                 UsView(store: store, presentedAsSheet: false)
+            } label: {
+                Image(systemName: "person.2")
+                    .accessibilityLabel("우리")
             }
 
-            Tab("설정", systemImage: "gearshape", value: AppTab.settings) {
+            Tab(value: AppTab.settings) {
                 SettingsView(
                     store: store,
                     clockFormat: clockDisplayFormatBinding,
@@ -196,6 +209,9 @@ struct ContentView: View {
                     animatesRouteHeart: $animatesRouteHeart,
                     routeHeartEmoji: routeHeartEmojiBinding
                 )
+            } label: {
+                Image(systemName: "gearshape")
+                    .accessibilityLabel("설정")
             }
         }
         .statusBarHidden(selectedTab == .home)
@@ -225,7 +241,8 @@ struct ContentView: View {
                         selection: $selectedGlobeMarker,
                         showsRouteHeart: showsRouteHeart,
                         animatesRouteHeart: animatesRouteHeart,
-                        routeHeartEmoji: routeHeartEmoji.rawValue
+                        routeHeartEmoji: routeHeartEmoji.rawValue,
+                        heartFlights: heartFlights
                     )
 
                     if let signalToast {
@@ -240,15 +257,14 @@ struct ContentView: View {
                     }
 
                     Actions(
-                        focus: focus,
                         heartPulse: heartSequence,
+                        isHeartDisabled: isHeartButtonDisabled,
                         currentSignal: store.latestSignal(.outgoing, at: now)?.signal,
                         onHeart: queueHeart,
-                        onPrimary: primaryAction,
                         onSignal: { route = .signal }
                     )
                     .padding(.horizontal, Metric.screenPadding)
-                    .padding(.bottom, Metric.s)
+                    .padding(.bottom, Metric.xl)
                     .frame(maxHeight: .infinity, alignment: .bottom)
                 }
                 .clipped()
@@ -257,7 +273,6 @@ struct ContentView: View {
                 Color.black.frame(height: 1)
             }
 
-            HeartBurstOverlay(particles: floatingHearts)
         }
         .background(Palette.spaceDeep.ignoresSafeArea())
     }
@@ -307,7 +322,7 @@ struct ContentView: View {
     }
 
     private var routeHeartEmoji: RouteHeartEmoji {
-        RouteHeartEmoji(rawValue: store.routeHeartEmoji) ?? .pink
+        RouteHeartEmoji(rawValue: store.routeHeartEmoji) ?? .red
     }
 
     private var routeHeartEmojiBinding: Binding<RouteHeartEmoji> {
@@ -409,17 +424,6 @@ struct ContentView: View {
         case .signal:
             EmptyView()
 
-        case .compose:
-            ParcelComposerSheet(
-                homeCity: store.homeCity,
-                partnerCity: store.partnerCity,
-                flightDuration: store.flightDuration()
-            ) { title, message, wrap in
-                store.sendParcel(title: title, message: message, wrap: wrap)
-                route = .none
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-            }
-
         case .letter(let parcel):
             ParcelLetterSheet(parcel: parcel) {
                 store.open(parcel)
@@ -439,28 +443,52 @@ struct ContentView: View {
 
     // MARK: - Actions
 
-    private func primaryAction() {
-        if case .readyToOpen(let parcel) = focus {
-            route = .letter(parcel)
-        } else {
-            route = .compose
-        }
-    }
-
     private func queueHeart() {
-        guard store.isConnected else { return }
+        guard store.isConnected,
+              !isHeartButtonDisabled,
+              outgoingHeartCycleCount < 30 else { return }
 
-        pendingHeartCount = min(pendingHeartCount + 1, 50)
-        emitHeart(incoming: false)
+        outgoingHeartCycleCount += 1
+        pendingHeartCount = min(pendingHeartCount + 1, 30)
+        emitHeart(incoming: false, cycleID: outgoingHeartCycleID)
         UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.45)
+
+        outgoingHeartCycleResetTask?.cancel()
+        if outgoingHeartCycleCount == 30 {
+            beginHeartCooldown()
+        } else {
+            outgoingHeartCycleResetTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { return }
+                outgoingHeartCycleCount = 0
+                outgoingHeartCycleID = UUID()
+                outgoingHeartCycleResetTask = nil
+            }
+        }
 
         heartSendTask?.cancel()
         heartSendTask = Task {
-            if pendingHeartCount < 50 {
+            if outgoingHeartCycleCount < 30 {
                 try? await Task.sleep(for: .milliseconds(700))
             }
             guard !Task.isCancelled else { return }
             await flushPendingHearts()
+        }
+    }
+
+    /// 채운 직후부터 31번째 입력을 막고, 30번째 하트가 도착해 터지면 바로 푼다.
+    private func beginHeartCooldown() {
+        isHeartButtonDisabled = true
+        outgoingHeartCycleResetTask?.cancel()
+        outgoingHeartCycleResetTask = nil
+        heartCooldownTask?.cancel()
+        heartCooldownTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1_600))
+            guard !Task.isCancelled else { return }
+            outgoingHeartCycleCount = 0
+            outgoingHeartCycleID = UUID()
+            isHeartButtonDisabled = false
+            heartCooldownTask = nil
         }
     }
 
@@ -479,19 +507,21 @@ struct ContentView: View {
         while !Task.isCancelled {
             let received = await store.refreshHeartBursts()
             for burst in received {
-                await playIncoming(burst)
+                if let lastIncomingHeartSentAt,
+                   burst.sentAt.timeIntervalSince(lastIncomingHeartSentAt) >= 3 {
+                    incomingHeartCycleID = UUID()
+                }
+                lastIncomingHeartSentAt = burst.sentAt
+                await playIncoming(burst, cycleID: incomingHeartCycleID)
             }
             try? await Task.sleep(for: .seconds(4))
         }
     }
 
-    private func playIncoming(_ burst: HeartBurst) async {
-        for index in 0..<burst.count {
+    private func playIncoming(_ burst: HeartBurst, cycleID: UUID) async {
+        for _ in 0..<burst.count {
             guard !Task.isCancelled else { return }
-            emitHeart(incoming: true)
-            if index.isMultiple(of: 4) {
-                UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.35)
-            }
+            emitHeart(incoming: true, cycleID: cycleID)
             try? await Task.sleep(for: .milliseconds(110))
         }
     }
@@ -586,14 +616,14 @@ struct ContentView: View {
         }
     }
 
-    private func emitHeart(incoming: Bool) {
+    private func emitHeart(incoming: Bool, cycleID: UUID) {
         heartSequence += 1
-        let particle = HeartParticle.make(sequence: heartSequence, incoming: incoming)
-        floatingHearts.append(particle)
+        let flight = RouteHeartFlight(incoming: incoming, cycleID: cycleID)
+        heartFlights.append(flight)
 
         Task {
             try? await Task.sleep(for: .milliseconds(1_600))
-            floatingHearts.removeAll { $0.id == particle.id }
+            heartFlights.removeAll { $0.id == flight.id }
         }
     }
 
@@ -773,59 +803,42 @@ private struct PartnerSignalToast: View {
 
 // MARK: - Actions
 
-/// 감정의 무게가 작은 순서대로 둔, 홈의 세 가지 아이콘 액션.
+/// 가장 가볍게 자주 주고받는, 홈의 두 가지 아이콘 액션.
 private struct Actions: View {
-    let focus: HomeFocus
     let heartPulse: Int
+    let isHeartDisabled: Bool
     let currentSignal: CoupleSignal?
     let onHeart: () -> Void
-    let onPrimary: () -> Void
     let onSignal: () -> Void
 
-    private var isArrived: Bool {
-        if case .readyToOpen = focus { return true }
-        return false
-    }
-
-    /// 평상시엔 흰색. 소포가 도착했을 때만 포장지 색으로 바뀐다.
-    /// 늘 색이 차 있으면 도착이 특별해 보이지 않는다.
-    private var arrivedWrap: ParcelWrap? {
-        if case .readyToOpen(let parcel) = focus { return parcel.wrap }
-        return nil
-    }
-
     var body: some View {
-        HStack(spacing: Metric.s) {
+        HStack(spacing: Metric.m) {
             Button(action: onHeart) {
                 Image(systemName: "heart.fill")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Color.pink)
                     .symbolEffect(.bounce, value: heartPulse)
-                    .frame(width: 52, height: 44)
+                    .frame(width: 46, height: 46)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
+            .buttonStyle(.glass(.clear))
+            .buttonBorderShape(.circle)
+            .disabled(isHeartDisabled)
             .accessibilityLabel("Heart 보내기")
-            .accessibilityHint("연속으로 누르면 누른 횟수만큼 상대에게 전달됩니다")
+            .accessibilityHint(
+                isHeartDisabled
+                    ? "잠시 후 다시 보낼 수 있습니다"
+                    : "30개까지 연속으로 상대에게 보낼 수 있습니다"
+            )
 
             Button(action: onSignal) {
-                Text(currentSignal?.emoji ?? "📡")
-                    .font(.system(size: 21))
-                    .frame(width: 52, height: 44)
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(Palette.textPrimary)
+                    .frame(width: 46, height: 46)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
+            .buttonStyle(.glass(.clear))
+            .buttonBorderShape(.circle)
             .accessibilityLabel(currentSignal.map { "내 Signal \($0.title). Signal 바꾸기" } ?? "Signal 보내기")
-
-            Button(action: onPrimary) {
-                Image(systemName: isArrived ? "shippingbox.fill" : "shippingbox")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(arrivedWrap?.color ?? Palette.textPrimary)
-                    .frame(width: 52, height: 44)
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
-            .accessibilityLabel(isArrived ? "도착한 소포 열기" : "소포 보내기")
         }
     }
 }
@@ -836,7 +849,6 @@ private struct Actions: View {
 struct SheetRoute {
     enum Destination: Identifiable, Hashable {
         case signal
-        case compose
         case letter(Parcel)
         case keepsakes
         case us
@@ -844,7 +856,6 @@ struct SheetRoute {
         var id: String {
             switch self {
             case .signal: "signal"
-            case .compose: "compose"
             case .letter(let parcel): "letter-\(parcel.id)"
             case .keepsakes: "keepsakes"
             case .us: "us"
@@ -862,7 +873,6 @@ struct SheetRoute {
 
     static let none = SheetRoute(presented: nil)
     static let signal = SheetRoute(presented: .signal)
-    static let compose = SheetRoute(presented: .compose)
     static let keepsakes = SheetRoute(presented: .keepsakes)
     static let us = SheetRoute(presented: .us)
     static func letter(_ parcel: Parcel) -> SheetRoute { SheetRoute(presented: .letter(parcel)) }

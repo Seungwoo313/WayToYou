@@ -87,11 +87,11 @@ final class WayToYouStore {
         static let demoMode = "wty.demoMode"
     }
 
-    /// `RouteHeartEmoji.pink`. Core가 화면 쪽 enum을 올려다보지 않으려고 값만 둔다.
-    static let defaultRouteHeartEmoji = "🩷"
+    /// `RouteHeartEmoji.red`. Core가 화면 쪽 enum을 올려다보지 않으려고 값만 둔다.
+    static let defaultRouteHeartEmoji = "❤️"
 
     /// 공유되기 전에는 이 기기에만 있던 설정이라 `@AppStorage`가 쓰던 키에 남아 있다.
-    /// 처음 한 번은 그 값을 이어받아, 쓰던 하트가 분홍으로 되돌아가지 않게 한다.
+    /// 처음 한 번은 그 값을 이어받아, 쓰던 하트가 기본값으로 되돌아가지 않게 한다.
     private static let legacyRouteHeartEmojiKey = "routeHeartEmoji"
 
     /// 데모 모드 타이밍. 실제 모드에서는 거리 기반 시간을 그대로 쓴다.
@@ -213,33 +213,6 @@ final class WayToYouStore {
             .max { $0.sentAt < $1.sentAt }
     }
 
-    /// 홈 상태 패널이 무엇을 보여줄지 한 곳에서 정한다.
-    /// 급한 것부터: 열 소포 > 오는 중 > 보낸 게 가는 중 > 상대가 열어봄 > 조용함
-    func focus(at date: Date) -> HomeFocus {
-        if let waiting = waitingToOpen(at: date).first {
-            return .readyToOpen(waiting)
-        }
-        let flying = inFlight(at: date)
-        if let incoming = flying.first(where: { $0.direction == .incoming }) {
-            return .incomingFlight(incoming)
-        }
-        if let outgoing = flying.first(where: { $0.direction == .outgoing }) {
-            return .outgoingFlight(outgoing)
-        }
-        // 최근 24시간 안에 상대가 내 소포를 열어봤다면 그걸 알려준다.
-        let recentlyRead = parcels
-            .filter { $0.direction == .outgoing }
-            .compactMap { parcel -> (Parcel, Date)? in
-                guard let openedAt = parcel.openedAt, date.timeIntervalSince(openedAt) < 86_400 else { return nil }
-                return (parcel, openedAt)
-            }
-            .max { $0.1 < $1.1 }
-        if let recentlyRead {
-            return .partnerRead(recentlyRead.0)
-        }
-        return .quiet
-    }
-
     var distanceKilometers: Int {
         Int(CoupleDistance.distanceInKilometers(from: homeCity, to: partnerCity).rounded())
     }
@@ -255,10 +228,6 @@ final class WayToYouStore {
             ? "\(Int(magnitude))시간"
             : String(format: "%.1f시간", magnitude)
         return delta > 0 ? "\(text) 빠름" : "\(text) 느림"
-    }
-
-    func flightDuration() -> TimeInterval {
-        demoMode ? Demo.flightDuration : CoupleDistance.deliveryDuration(from: homeCity, to: partnerCity)
     }
 
     func avatarData(for profile: UserProfile) -> Data? {
@@ -561,21 +530,6 @@ final class WayToYouStore {
         }
     }
 
-    func sendParcel(title: String, message: String, wrap: ParcelWrap, now: Date = .now) {
-        let parcel = Parcel(
-            direction: .outgoing,
-            title: title,
-            message: message,
-            wrap: wrap,
-            fromCityID: homeCityID,
-            toCityID: partnerCityID,
-            sentAt: now,
-            arrivesAt: now.addingTimeInterval(flightDuration())
-        )
-        parcels.append(parcel)
-        save()
-    }
-
     func open(_ parcel: Parcel, now: Date = .now) {
         guard let index = parcels.firstIndex(where: { $0.id == parcel.id }), parcels[index].openedAt == nil else { return }
         parcels[index].openedAt = now
@@ -779,7 +733,7 @@ final class WayToYouStore {
             let burst = HeartBurst(
                 id: UUID(),
                 direction: .outgoing,
-                count: min(max(count, 1), 50),
+                count: min(max(count, 1), 30),
                 sentAt: .now
             )
             heartBursts.append(burst)
@@ -789,7 +743,7 @@ final class WayToYouStore {
         }
         #endif
         guard isConnected, let backendConnectionService, let activeUserID else { return false }
-        let boundedCount = min(max(count, 1), 50)
+        let boundedCount = min(max(count, 1), 30)
 
         heartMessage = nil
 
@@ -1180,23 +1134,5 @@ final class WayToYouStore {
         guard let profileID,
               case .connected(let connection) = status else { return nil }
         return connection.partner(for: profileID)
-    }
-}
-
-/// 홈 상태 패널이 그릴 한 가지 상황.
-enum HomeFocus: Hashable {
-    case quiet
-    case outgoingFlight(Parcel)
-    case incomingFlight(Parcel)
-    case readyToOpen(Parcel)
-    case partnerRead(Parcel)
-
-    var parcel: Parcel? {
-        switch self {
-        case .quiet: nil
-        case .outgoingFlight(let parcel), .incomingFlight(let parcel),
-             .readyToOpen(let parcel), .partnerRead(let parcel):
-            parcel
-        }
     }
 }
