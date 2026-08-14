@@ -50,8 +50,8 @@ struct SignalPickerSheet: View {
 
             DisplayPanel(
                 value: distanceDigits,
-                unit: "KM",
-                topLeft: isEditingKeys ? "EDIT" : "TO",
+                stagedEmoji: stagedSignal?.emoji,
+                topLeft: isEditingKeys ? "EDIT" : "KM",
                 topRight: isEditingKeys ? "KEYS" : partnerName,
                 bottomLeft: isEditingKeys ? "EMOJI" : partnerClock,
                 bottomRight: isEditingKeys ? "+ LABEL" : partnerCityName
@@ -245,7 +245,8 @@ private struct GearButton: View {
 
 private struct DisplayPanel: View {
     let value: String
-    let unit: String
+    /// 고른 신호가 있으면 단위 자리에 그 이모지가 대신 뜬다.
+    let stagedEmoji: String?
     let topLeft: String
     let topRight: String
     let bottomLeft: String
@@ -266,16 +267,29 @@ private struct DisplayPanel: View {
     }
 
     private var readout: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .bottom, spacing: 10) {
             SevenSegmentReadout(text: value)
-            Text(unit)
-                .font(.system(size: 14, weight: .black, design: .monospaced))
-                .tracking(1)
-                .foregroundStyle(Keypad.ledDim)
-                .padding(.bottom, 4)
+            trailing
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private var trailing: some View {
+        if let stagedEmoji {
+            Text(stagedEmoji)
+                .font(.system(size: 30))
+                .padding(.bottom, 2)
+        } else {
+            Text("NO\nSIGNAL")
+                .font(.system(size: 11, weight: .black, design: .monospaced))
+                .tracking(1)
+                .lineSpacing(-1)
+                .multilineTextAlignment(.leading)
+                .foregroundStyle(Keypad.ledDim)
+                .padding(.bottom, 3)
+        }
     }
 
     private var glass: some View {
