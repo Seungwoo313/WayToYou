@@ -686,12 +686,7 @@ struct GlobeMapView: UIViewRepresentable {
         private var handledHeartFlightOrder: [UUID] = []
         private var activeHeartFlights: [UUID: ActiveHeartFlight] = [:]
         private var heartFlightDisplayLink: CADisplayLink?
-        private var absorbedHeartCounts: [GlobeProfileMarker.ID: Int] = [:]
-        private var absorbedHeartCycleIDs: [GlobeProfileMarker.ID: UUID] = [:]
-        private var heartReactionTokens: [GlobeProfileMarker.ID: UUID] = [:]
-        private var heartPopWorkItems: [GlobeProfileMarker.ID: DispatchWorkItem] = [:]
-        private let heartAbsorbFeedback = UIImpactFeedbackGenerator(style: .soft)
-        private let heartPopFeedback = UIImpactFeedbackGenerator(style: .rigid)
+        private let heartArrivalFeedback = UIImpactFeedbackGenerator(style: .rigid)
 
         private enum MarkerRepresentation {
             case native
@@ -712,7 +707,6 @@ struct GlobeMapView: UIViewRepresentable {
         private struct ActiveHeartFlight {
             let view: RouteHeartFlightView
             let incoming: Bool
-            let cycleID: UUID
             let trajectory: HeartTrajectory
             let startTime: CFTimeInterval
             let duration: CFTimeInterval
@@ -743,8 +737,7 @@ struct GlobeMapView: UIViewRepresentable {
 
         func connect(to mapView: NativeGlobeMapView) {
             self.mapView = mapView
-            heartAbsorbFeedback.prepare()
-            heartPopFeedback.prepare()
+            heartArrivalFeedback.prepare()
             mapView.onUsableLayout = { [weak self, weak mapView] in
                 guard let self, let mapView else { return }
                 self.beginInitialFramingIfPossible(in: mapView)
@@ -779,7 +772,6 @@ struct GlobeMapView: UIViewRepresentable {
             routeSampleProjectionIsStale = false
             markerRepresentationRefreshScheduled = false
             cancelHeartFlights()
-            cancelHeartReactions()
             mapView = nil
         }
 
@@ -814,7 +806,6 @@ struct GlobeMapView: UIViewRepresentable {
 
             if routeChanged {
                 cancelHeartFlights()
-                cancelHeartReactions()
                 if let routeOverlay {
                     mapView.removeOverlay(routeOverlay)
                     self.routeOverlay = nil
@@ -898,7 +889,6 @@ struct GlobeMapView: UIViewRepresentable {
             activeHeartFlights[flight.id] = ActiveHeartFlight(
                 view: view,
                 incoming: flight.incoming,
-                cycleID: flight.cycleID,
                 trajectory: HeartTrajectory(id: flight.id),
                 startTime: CACurrentMediaTime(),
                 duration: UIAccessibility.isReduceMotionEnabled ? 0.85 : 1.45
@@ -968,14 +958,13 @@ struct GlobeMapView: UIViewRepresentable {
                     continue
                 }
                 flight.view.removeFromSuperview()
-                // 프로필의 확대·팡·도착 햅틱은 보낸 사람 화면에서만 재생한다.
-                // 받은 사람 화면의 내 프로필은 네트워크 도착 타이밍과 무관하게 고정한다.
-                guard !flight.incoming else { continue }
-                absorbHeart(
-                    into: .partner,
-                    cycleID: flight.cycleID,
+                // 어느 방향이든 도착한 프로필에 같은 펄스와 햅틱을 재생한다.
+                pulseHeart(
+                    on: flight.incoming ? .mine : .partner,
                     in: mapView
                 )
+                heartArrivalFeedback.impactOccurred(intensity: 0.82)
+                heartArrivalFeedback.prepare()
             }
             guard activeHeartFlights.isEmpty else { return }
             heartFlightDisplayLink?.invalidate()
@@ -1034,95 +1023,15 @@ struct GlobeMapView: UIViewRepresentable {
             return nil
         }
 
-        private func absorbHeart(
-            into id: GlobeProfileMarker.ID,
-            cycleID: UUID,
+        private func pulseHeart(
+            on id: GlobeProfileMarker.ID,
             in mapView: NativeGlobeMapView
         ) {
-            if let previousCycleID = absorbedHeartCycleIDs[id],
-               previousCycleID != cycleID {
-                heartPopWorkItems[id]?.cancel()
-                heartPopWorkItems[id] = nil
-                heartReactionTokens[id] = nil
-                absorbedHeartCounts[id] = nil
-                releaseProfileHeartAbsorption(for: id, in: mapView)
-            }
-            absorbedHeartCycleIDs[id] = cycleID
-            let count = min((absorbedHeartCounts[id] ?? 0) + 1, 30)
-            absorbedHeartCounts[id] = count
-            animateProfileHeartAbsorption(for: id, level: count, in: mapView)
-
-            let intensity = min(0.34 + CGFloat(count - 1) * 0.018, 0.88)
-            heartAbsorbFeedback.impactOccurred(intensity: intensity)
-            heartAbsorbFeedback.prepare()
-
-            heartPopWorkItems[id]?.cancel()
-            let reachedBurstLimit = count == 30
-            let reactionToken = UUID()
-            heartReactionTokens[id] = reactionToken
-            let workItem = DispatchWorkItem { [weak self, weak mapView] in
-                guard let self,
-                      let mapView,
-                      self.heartReactionTokens[id] == reactionToken else { return }
-                self.heartPopWorkItems[id] = nil
-                self.heartReactionTokens[id] = nil
-                self.absorbedHeartCounts[id] = nil
-                self.absorbedHeartCycleIDs[id] = nil
-                if reachedBurstLimit {
-                    self.animateProfileHeartPop(for: id, in: mapView)
-                    self.heartPopFeedback.impactOccurred(intensity: 1)
-                    self.heartPopFeedback.prepare()
-                } else {
-                    self.releaseProfileHeartAbsorption(for: id, in: mapView)
-                }
-            }
-            heartPopWorkItems[id] = workItem
-            DispatchQueue.main.asyncAfter(
-                deadline: reachedBurstLimit
-                    ? .now() + .milliseconds(140)
-                    : .now() + .seconds(3),
-                execute: workItem
-            )
-        }
-
-        private func animateProfileHeartAbsorption(
-            for id: GlobeProfileMarker.ID,
-            level: Int,
-            in mapView: NativeGlobeMapView
-        ) {
-            if let indicator = backsideIndicatorsByID[id] {
-                indicator.absorbHeart(level: level)
-            }
+            backsideIndicatorsByID[id]?.pulseHeart()
             if let annotation = annotationsByID[id],
                let view = mapView.view(for: annotation)
                 as? GlobeProfileAnnotationView {
-                view.absorbHeart(level: level)
-            }
-        }
-
-        private func animateProfileHeartPop(
-            for id: GlobeProfileMarker.ID,
-            in mapView: NativeGlobeMapView
-        ) {
-            if let indicator = backsideIndicatorsByID[id] {
-                indicator.popAbsorbedHearts()
-            }
-            if let annotation = annotationsByID[id],
-               let view = mapView.view(for: annotation)
-                as? GlobeProfileAnnotationView {
-                view.popAbsorbedHearts()
-            }
-        }
-
-        private func releaseProfileHeartAbsorption(
-            for id: GlobeProfileMarker.ID,
-            in mapView: NativeGlobeMapView
-        ) {
-            backsideIndicatorsByID[id]?.releaseAbsorbedHearts()
-            if let annotation = annotationsByID[id],
-               let view = mapView.view(for: annotation)
-                as? GlobeProfileAnnotationView {
-                view.releaseAbsorbedHearts()
+                view.pulseHeart()
             }
         }
 
@@ -1131,19 +1040,6 @@ struct GlobeMapView: UIViewRepresentable {
             heartFlightDisplayLink = nil
             activeHeartFlights.values.forEach { $0.view.removeFromSuperview() }
             activeHeartFlights.removeAll()
-        }
-
-        private func cancelHeartReactions() {
-            heartPopWorkItems.values.forEach { $0.cancel() }
-            heartPopWorkItems.removeAll()
-            heartReactionTokens.removeAll()
-            absorbedHeartCounts.removeAll()
-            absorbedHeartCycleIDs.removeAll()
-            for annotation in annotationsByID.values {
-                (mapView?.view(for: annotation) as? GlobeProfileAnnotationView)?
-                    .resetHeartReaction()
-            }
-            backsideIndicatorsByID.values.forEach { $0.resetHeartReaction() }
         }
 
         /// Route가 바뀔 때마다 probe 257개를 통째로 버리고 다시 만들 필요는 없다.
@@ -2218,9 +2114,6 @@ struct GlobeMapView: UIViewRepresentable {
             )
             guard let profileView = view as? GlobeProfileAnnotationView else { return view }
             profileView.configure(with: annotation.marker)
-            if let absorbedHeartCount = absorbedHeartCounts[annotation.id] {
-                profileView.absorbHeart(level: absorbedHeartCount)
-            }
             profileView.setBacksidePresentation(false)
             profileView.setCoordinateLegProgress(coordinateLegProgress)
             profileView.setSide(markerOrder.wrappedValue.side(for: annotation.id))
@@ -2765,16 +2658,8 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     private var isBacksidePresentation = false
     private var coordinateLegProgress: CGFloat = 1
     private var coordinateOffsetX: CGFloat = 0
-    private var heartReactionScale: CGFloat = 1
-    private var heartBurstParticleViews: [UIView] = []
     private let tapFeedback = UIImpactFeedbackGenerator(style: .medium)
     var onActivate: (() -> Void)?
-
-    private var displayedHeartReactionScale: CGFloat {
-        UIAccessibility.isReduceMotionEnabled
-            ? min(heartReactionScale, 1.12)
-            : heartReactionScale
-    }
 
     override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
@@ -3002,7 +2887,6 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     override func prepareForReuse() {
         super.prepareForReuse()
         onActivate = nil
-        resetHeartReaction()
         avatarView.layer.removeAllAnimations()
         selectionHaloView.layer.removeAllAnimations()
         avatarView.transform = .identity
@@ -3042,197 +2926,20 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         return convert(avatarView.center, to: view)
     }
 
-    func absorbHeart(level: Int) {
-        let clampedLevel = min(max(level, 1), 30)
-        heartReactionScale = 1 + CGFloat(clampedLevel) * 0.025
-        let targetScale = displayedHeartReactionScale
+    /// 누적하지 않고 살짝 커졌다가 매번 원래 크기로 돌아오는 도착 펄스다.
+    func pulseHeart() {
+        guard !UIAccessibility.isReduceMotionEnabled else { return }
 
-        avatarView.layer.removeAllAnimations()
-        selectionHaloView.layer.removeAllAnimations()
-        selectionHaloView.backgroundColor = UIColor.systemPink.withAlphaComponent(0.34)
-        selectionHaloView.transform = CGAffineTransform(
-            scaleX: max(targetScale - 0.08, 1),
-            y: max(targetScale - 0.08, 1)
-        )
-        selectionHaloView.alpha = 0.34
-
-        if UIAccessibility.isReduceMotionEnabled {
-            avatarView.transform = CGAffineTransform(
-                scaleX: targetScale,
-                y: targetScale
-            )
-            selectionHaloView.alpha = 0
-            return
-        }
-
-        UIView.animate(
-            withDuration: 0.2,
-            delay: 0,
-            usingSpringWithDamping: 0.58,
-            initialSpringVelocity: 0.9,
-            options: [.allowUserInteraction, .beginFromCurrentState]
-        ) {
-            self.avatarView.transform = CGAffineTransform(
-                scaleX: targetScale,
-                y: targetScale
-            )
-        }
-        UIView.animate(
-            withDuration: 0.22,
-            delay: 0,
-            options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut]
-        ) {
-            self.selectionHaloView.transform = CGAffineTransform(
-                scaleX: targetScale + 0.18,
-                y: targetScale + 0.18
-            )
-            self.selectionHaloView.alpha = 0
-        }
-    }
-
-    func popAbsorbedHearts() {
-        let accumulatedScale = displayedHeartReactionScale
-        heartReactionScale = 1
-        avatarView.layer.removeAllAnimations()
-        selectionHaloView.layer.removeAllAnimations()
-
-        guard !UIAccessibility.isReduceMotionEnabled else {
-            avatarView.transform = .identity
-            selectionHaloView.transform = .identity
-            selectionHaloView.alpha = 0
-            return
-        }
-
-        playHeartBurstParticles()
-        selectionHaloView.backgroundColor = UIColor.systemPink.withAlphaComponent(0.42)
-        selectionHaloView.transform = CGAffineTransform(
-            scaleX: max(accumulatedScale - 0.08, 1),
-            y: max(accumulatedScale - 0.08, 1)
-        )
-        selectionHaloView.alpha = 0.44
-        let popScale = min(max(accumulatedScale + 0.28, 1.72), 2.1)
-
-        UIView.animate(
-            withDuration: 0.11,
-            delay: 0,
-            options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut]
-        ) {
-            self.avatarView.transform = CGAffineTransform(
-                scaleX: popScale,
-                y: popScale
-            )
-            self.selectionHaloView.transform = CGAffineTransform(
-                scaleX: popScale + 0.08,
-                y: popScale + 0.08
-            )
-        } completion: { _ in
-            UIView.animate(
-                withDuration: 0.46,
-                delay: 0,
-                usingSpringWithDamping: 0.46,
-                initialSpringVelocity: 0.8,
-                options: [.allowUserInteraction, .beginFromCurrentState]
-            ) {
-                self.avatarView.transform = .identity
-            }
-            UIView.animate(
-                withDuration: 0.3,
-                delay: 0,
-                options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut]
-            ) {
-                self.selectionHaloView.transform = CGAffineTransform(
-                    scaleX: 2.15,
-                    y: 2.15
-                )
-                self.selectionHaloView.alpha = 0
-            }
-        }
-    }
-
-    func releaseAbsorbedHearts() {
-        heartReactionScale = 1
-        avatarView.layer.removeAllAnimations()
-        selectionHaloView.layer.removeAllAnimations()
-
-        UIView.animate(
-            withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.38,
-            delay: 0,
-            usingSpringWithDamping: 0.72,
-            initialSpringVelocity: 0.35,
-            options: [.allowUserInteraction, .beginFromCurrentState]
-        ) {
-            self.avatarView.transform = .identity
-            self.selectionHaloView.transform = .identity
-            self.selectionHaloView.alpha = 0
-        } completion: { _ in
-            self.selectionHaloView.backgroundColor = UIColor.white.withAlphaComponent(0.18)
-        }
-    }
-
-    func resetHeartReaction() {
-        heartReactionScale = 1
-        avatarView.layer.removeAllAnimations()
-        selectionHaloView.layer.removeAllAnimations()
-        avatarView.transform = .identity
-        selectionHaloView.transform = .identity
-        selectionHaloView.alpha = 0
-        selectionHaloView.backgroundColor = UIColor.white.withAlphaComponent(0.18)
-        heartBurstParticleViews.forEach {
-            $0.layer.removeAllAnimations()
-            $0.removeFromSuperview()
-        }
-        heartBurstParticleViews.removeAll()
-    }
-
-    private func playHeartBurstParticles() {
-        let image = UIImage(
-            systemName: "heart.fill",
-            withConfiguration: UIImage.SymbolConfiguration(
-                pointSize: 8,
-                weight: .bold
-            )
-        )
-        let origin = avatarView.center
-
-        let particleCount = 12
-        for index in 0..<particleCount {
-            let particle = UIImageView(image: image)
-            particle.tintColor = index.isMultiple(of: 3) ? .white : .systemPink
-            particle.contentMode = .center
-            particle.bounds = CGRect(x: 0, y: 0, width: 12, height: 12)
-            particle.center = origin
-            particle.isUserInteractionEnabled = false
-            let angle = CGFloat(index) / CGFloat(particleCount) * .pi * 2 - .pi / 2
-            particle.transform = CGAffineTransform(rotationAngle: angle)
-                .scaledBy(x: 0.45, y: 0.45)
-            addSubview(particle)
-            heartBurstParticleViews.append(particle)
-
-            let distance: CGFloat = index.isMultiple(of: 2) ? 52 : 43
-            let destination = CGPoint(
-                x: origin.x + cos(angle) * distance,
-                y: origin.y + sin(angle) * distance
-            )
-            UIView.animateKeyframes(
-                withDuration: 0.56,
-                delay: Double(index) * 0.008,
-                options: [.allowUserInteraction, .calculationModeCubic]
-            ) {
-                UIView.addKeyframe(withRelativeStartTime: 0, relativeDuration: 0.62) {
-                    particle.center = destination
-                    particle.transform = CGAffineTransform(rotationAngle: angle + 0.35)
-                }
-                UIView.addKeyframe(withRelativeStartTime: 0.48, relativeDuration: 0.52) {
-                    particle.alpha = 0
-                    particle.transform = CGAffineTransform(rotationAngle: angle + 0.55)
-                        .scaledBy(x: 0.55, y: 0.55)
-                }
-            } completion: { [weak self, weak particle] _ in
-                guard let particle else { return }
-                particle.removeFromSuperview()
-                self?.heartBurstParticleViews.removeAll { $0 === particle }
-            }
-        }
+        let pulse = CAKeyframeAnimation(keyPath: "transform.scale")
+        pulse.values = [1, 1.12, 0.98, 1]
+        pulse.keyTimes = [0, 0.32, 0.7, 1]
+        pulse.timingFunctions = [
+            CAMediaTimingFunction(name: .easeOut),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+            CAMediaTimingFunction(name: .easeOut)
+        ]
+        pulse.duration = 0.3
+        avatarView.layer.add(pulse, forKey: "heartArrivalPulse")
     }
 
     func setCoordinateOffsetX(_ horizontalOffset: CGFloat) {
@@ -3307,10 +3014,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     private func playTapFeedback() {
         avatarView.layer.removeAllAnimations()
         selectionHaloView.layer.removeAllAnimations()
-        let restingTransform = CGAffineTransform(
-            scaleX: displayedHeartReactionScale,
-            y: displayedHeartReactionScale
-        )
+        let restingTransform = CGAffineTransform.identity
         avatarView.transform = restingTransform
         selectionHaloView.transform = .identity
         selectionHaloView.alpha = 0
@@ -3318,8 +3022,8 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
         guard !UIAccessibility.isReduceMotionEnabled else { return }
 
         avatarView.transform = CGAffineTransform(
-            scaleX: displayedHeartReactionScale * 0.82,
-            y: displayedHeartReactionScale * 0.82
+            scaleX: 0.82,
+            y: 0.82
         )
         UIView.animate(
             withDuration: 0.32,
@@ -3335,10 +3039,7 @@ private final class GlobeProfileAnnotationView: MKAnnotationView {
     private func clearSelection() {
         avatarView.layer.removeAllAnimations()
         selectionHaloView.layer.removeAllAnimations()
-        avatarView.transform = CGAffineTransform(
-            scaleX: displayedHeartReactionScale,
-            y: displayedHeartReactionScale
-        )
+        avatarView.transform = .identity
         selectionHaloView.transform = .identity
         selectionHaloView.alpha = 0
     }
@@ -3572,20 +3273,8 @@ private final class GlobeBacksideIndicatorView: UIView {
         profileView.transform = CGAffineTransform(scaleX: scale, y: scale)
     }
 
-    func absorbHeart(level: Int) {
-        profileView.absorbHeart(level: level)
-    }
-
-    func popAbsorbedHearts() {
-        profileView.popAbsorbedHearts()
-    }
-
-    func releaseAbsorbedHearts() {
-        profileView.releaseAbsorbedHearts()
-    }
-
-    func resetHeartReaction() {
-        profileView.resetHeartReaction()
+    func pulseHeart() {
+        profileView.pulseHeart()
     }
 
     func avatarCenter(convertedTo view: UIView) -> CGPoint {

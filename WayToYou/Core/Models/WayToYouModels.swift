@@ -161,9 +161,9 @@ struct SignalEvent: Identifiable, Codable, Hashable {
     let direction: ParcelDirection
     let sentAt: Date
 
-    /// 시그널은 "지금의 마음"이라 하루가 지나면 흐려진다.
+    /// 시그널은 현재 상태이므로 보낸 뒤 3시간까지만 프로필에 표시한다.
     func isFresh(at date: Date) -> Bool {
-        date.timeIntervalSince(sentAt) < 24 * 60 * 60
+        date.timeIntervalSince(sentAt) < 3 * 60 * 60
     }
 }
 

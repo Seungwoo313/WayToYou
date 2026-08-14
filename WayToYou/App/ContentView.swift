@@ -14,14 +14,11 @@ struct ContentView: View {
     @State private var heartFlights: [RouteHeartFlight] = []
     @State private var pendingHeartCount = 0
     @State private var outgoingHeartCycleCount = 0
-    @State private var outgoingHeartCycleID = UUID()
     @State private var isHeartButtonDisabled = false
     @State private var heartSequence = 0
     @State private var heartSendTask: Task<Void, Never>?
     @State private var outgoingHeartCycleResetTask: Task<Void, Never>?
     @State private var heartCooldownTask: Task<Void, Never>?
-    @State private var incomingHeartCycleID = UUID()
-    @State private var lastIncomingHeartSentAt: Date?
     @State private var signalToast: SignalEvent?
     @State private var signalToastDismissTask: Task<Void, Never>?
     @State private var selectedGlobeMarker: GlobeMarkerSelection?
@@ -402,7 +399,13 @@ struct ContentView: View {
             // 내려가는 것은 기계가 확인을 한 박자 보여준 뒤 스스로 한다.
             onSelect: { signal in
                 UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-                Task { _ = await store.sendSignal(signal) }
+                // 상대에게는 즉시 보내되, 내 아이콘만 기계가 내려간 뒤 바뀐다.
+                Task {
+                    _ = await store.sendSignal(
+                        signal,
+                        localDisplayDelay: .milliseconds(900)
+                    )
+                }
             },
             onEditKey: { index in
                 guard store.signalKeys.indices.contains(index) else { return }
@@ -450,8 +453,8 @@ struct ContentView: View {
 
         outgoingHeartCycleCount += 1
         pendingHeartCount = min(pendingHeartCount + 1, 30)
-        emitHeart(incoming: false, cycleID: outgoingHeartCycleID)
-        UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.45)
+        emitHeart(incoming: false)
+        UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.78)
 
         outgoingHeartCycleResetTask?.cancel()
         if outgoingHeartCycleCount == 30 {
@@ -461,7 +464,6 @@ struct ContentView: View {
                 try? await Task.sleep(for: .seconds(3))
                 guard !Task.isCancelled else { return }
                 outgoingHeartCycleCount = 0
-                outgoingHeartCycleID = UUID()
                 outgoingHeartCycleResetTask = nil
             }
         }
@@ -486,7 +488,6 @@ struct ContentView: View {
             try? await Task.sleep(for: .milliseconds(1_600))
             guard !Task.isCancelled else { return }
             outgoingHeartCycleCount = 0
-            outgoingHeartCycleID = UUID()
             isHeartButtonDisabled = false
             heartCooldownTask = nil
         }
@@ -507,21 +508,16 @@ struct ContentView: View {
         while !Task.isCancelled {
             let received = await store.refreshHeartBursts()
             for burst in received {
-                if let lastIncomingHeartSentAt,
-                   burst.sentAt.timeIntervalSince(lastIncomingHeartSentAt) >= 3 {
-                    incomingHeartCycleID = UUID()
-                }
-                lastIncomingHeartSentAt = burst.sentAt
-                await playIncoming(burst, cycleID: incomingHeartCycleID)
+                await playIncoming(burst)
             }
             try? await Task.sleep(for: .seconds(4))
         }
     }
 
-    private func playIncoming(_ burst: HeartBurst, cycleID: UUID) async {
+    private func playIncoming(_ burst: HeartBurst) async {
         for _ in 0..<burst.count {
             guard !Task.isCancelled else { return }
-            emitHeart(incoming: true, cycleID: cycleID)
+            emitHeart(incoming: true)
             try? await Task.sleep(for: .milliseconds(110))
         }
     }
@@ -616,9 +612,9 @@ struct ContentView: View {
         }
     }
 
-    private func emitHeart(incoming: Bool, cycleID: UUID) {
+    private func emitHeart(incoming: Bool) {
         heartSequence += 1
-        let flight = RouteHeartFlight(incoming: incoming, cycleID: cycleID)
+        let flight = RouteHeartFlight(incoming: incoming)
         heartFlights.append(flight)
 
         Task {

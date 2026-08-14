@@ -578,9 +578,13 @@ final class WayToYouStore {
     }
 
     @discardableResult
-    func sendSignal(_ signal: CoupleSignal) async -> Bool {
+    func sendSignal(
+        _ signal: CoupleSignal,
+        localDisplayDelay: Duration = .zero
+    ) async -> Bool {
         #if DEBUG
         if debugAccount != nil {
+            try? await Task.sleep(for: localDisplayDelay)
             let event = SignalEvent(
                 id: UUID(),
                 signal: signal,
@@ -598,7 +602,11 @@ final class WayToYouStore {
         signalMessage = nil
 
         do {
-            let remote = try await backendConnectionService.sendSignal(signal)
+            // 서버 전송과 내 화면의 표시 대기를 동시에 시작한다. 상대방에게 Signal이
+            // 도착하는 속도는 늦추지 않고, 내 착지 애니메이션의 시작만 늦춘다.
+            async let remoteRequest = backendConnectionService.sendSignal(signal)
+            async let displayDelay: Void = Task.sleep(for: localDisplayDelay)
+            let (remote, _) = try await (remoteRequest, displayDelay)
             let event = SignalEvent(
                 id: remote.id,
                 signal: remote.signal,

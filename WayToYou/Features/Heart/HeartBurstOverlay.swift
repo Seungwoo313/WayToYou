@@ -5,5 +5,4 @@ import Foundation
 struct RouteHeartFlight: Identifiable, Equatable {
     let id = UUID()
     let incoming: Bool
-    let cycleID: UUID
 }
